@@ -88,7 +88,7 @@ class AddContentView(discord.ui.View):
     def __init__(self, user_id, title, multiple=False, titles=None):
         super().__init__()
         self.user_id = user_id
-        self.title = title      # Titre pour un ajout simple (None pour ajouter plusieurs)
+        self.title = title      # Titre pour un ajout simple
         self.titles = titles    # Liste de titres pour un ajout multiple
         self.multiple = multiple
         self.selected_type = None
@@ -107,7 +107,7 @@ class AddContentView(discord.ui.View):
     )
     async def select_type(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.selected_type = select.values[0]
-        # Confirmation de la sélection (éphémère)
+        # Confirmation éphémère
         await interaction.response.send_message(
             f"Type sélectionné : **{self.selected_type} {TYPE_EMOJIS.get(self.selected_type, '')}**", 
             ephemeral=True
@@ -125,7 +125,7 @@ class AddContentView(discord.ui.View):
     )
     async def select_status(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.selected_status = select.values[0]
-        # Confirmation de la sélection (éphémère)
+        # Confirmation éphémère
         await interaction.response.send_message(
             f"Statut sélectionné : **{self.selected_status} {STATUS_EMOJIS.get(self.selected_status, '')}**", 
             ephemeral=True
@@ -133,12 +133,10 @@ class AddContentView(discord.ui.View):
 
     @discord.ui.button(label="Confirmer", style=discord.ButtonStyle.green)
     async def confirm(self, button: discord.ui.Button, interaction: discord.Interaction):
-        # Vérifie que les sélections ont été faites
         if self.selected_type is None or self.selected_status is None:
             await interaction.response.send_message("Merci de sélectionner le type et le statut.", ephemeral=True)
             return
 
-        # Insertion en base de données
         conn = get_db_connection()
         cur = conn.cursor()
         if not self.multiple:
@@ -158,7 +156,7 @@ class AddContentView(discord.ui.View):
         cur.close()
         conn.close()
 
-        # Création d'un embed public affichant le contenu ajouté
+        # Embed public montrant le contenu ajouté
         embed = discord.Embed(
             title="Nouveau contenu ajouté",
             description=f"**{content_title}**",
@@ -167,7 +165,6 @@ class AddContentView(discord.ui.View):
         embed.add_field(name="Type", value=f"{self.selected_type} {TYPE_EMOJIS.get(self.selected_type, '')}", inline=True)
         embed.add_field(name="Statut", value=f"{self.selected_status} {STATUS_EMOJIS.get(self.selected_status, '')}", inline=True)
 
-        # Envoi du message public pour que tout le monde voie l'ajout
         await interaction.response.send_message(embed=embed)
         self.stop()
 
@@ -192,32 +189,61 @@ async def ajouterplus(interaction: discord.Interaction, titles: str):
         view=view
     )
 
-@bot.tree.command(name="liste", description="Afficher la liste de contenus d'un utilisateur")
+@bot.tree.command(name="liste", description="Afficher la liste de contenus d'un utilisateur (triée par type)")
 async def liste(interaction: discord.Interaction, member: discord.Member = None):
+    """
+    Affiche la liste des contenus d'un utilisateur, triés et regroupés par type de contenu.
+    """
     target = member or interaction.user
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, title, content_type, status, rating FROM contents WHERE user_id = %s", (str(target.id),))
+    # On trie d'abord par content_type, puis par title ou id
+    cur.execute("""
+        SELECT id, title, content_type, status, rating 
+        FROM contents 
+        WHERE user_id = %s 
+        ORDER BY content_type, title
+    """, (str(target.id),))
     rows = cur.fetchall()
     cur.close()
     conn.close()
+
     if not rows:
         await interaction.response.send_message(f"{target.display_name} n'a aucun contenu dans sa liste.", ephemeral=True)
         return
 
-    embed = discord.Embed(title=f"Liste de contenus de {target.display_name}", color=0x3498db)
+    # On groupe par type
+    by_type = {}
     for row in rows:
-        entry_id = row['id']
-        title = row['title']
-        content_type = row['content_type']
-        status = row['status']
-        rating = row['rating']
-        note_str = f" | Note : **{rating}/10**" if rating is not None else ""
+        ctype = row['content_type']
+        if ctype not in by_type:
+            by_type[ctype] = []
+        by_type[ctype].append(row)
+
+    embed = discord.Embed(title=f"Liste de contenus de {target.display_name}", color=0x3498db)
+
+    # Pour un ordre fixe, on peut lister les types connus dans un certain ordre, sinon on tri par ordre alpha
+    known_types = ["Série", "Animé", "Webtoon", "Manga"]
+    # On récupère aussi d'éventuels types hors du dictionnaire
+    sorted_types = [t for t in known_types if t in by_type] + sorted(t for t in by_type if t not in known_types)
+
+    for ctype in sorted_types:
+        contents_str = ""
+        for row in by_type[ctype]:
+            entry_id = row['id']
+            title = row['title']
+            status = row['status']
+            rating = row['rating']
+            note_str = f" | Note : {rating}/10" if rating is not None else ""
+            # On assemble les infos dans une ligne
+            contents_str += f"**{title}** {STATUS_EMOJIS.get(status, '')} (ID : {entry_id}){note_str}\n"
+        # On ajoute un champ par type
         embed.add_field(
-            name=f"{title} {TYPE_EMOJIS.get(content_type, '')}",
-            value=f"Type : **{content_type}** | Statut : **{status} {STATUS_EMOJIS.get(status, '')}** (ID : {entry_id}){note_str}",
+            name=f"{ctype} {TYPE_EMOJIS.get(ctype, '')}",
+            value=contents_str,
             inline=False
         )
+
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="modifier", description="Modifier le statut d'un contenu par ID")
@@ -302,8 +328,10 @@ async def supprimer(interaction: discord.Interaction, member: discord.Member = N
     if target.id != interaction.user.id and not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("Vous ne pouvez supprimer que vos propres contenus.", ephemeral=True)
         return
+
     conn = get_db_connection()
     cur = conn.cursor()
+
     query = "SELECT id, title, content_type, status FROM contents WHERE user_id = %s"
     params = [str(target.id)]
     if content_type is not None:
@@ -312,10 +340,12 @@ async def supprimer(interaction: discord.Interaction, member: discord.Member = N
     if status is not None:
         query += " AND status = %s"
         params.append(status)
+
     cur.execute(query, tuple(params))
     rows = cur.fetchall()
     cur.close()
     conn.close()
+
     if not rows:
         await interaction.response.send_message("Aucun contenu correspondant n'a été trouvé.", ephemeral=True)
         return
@@ -370,6 +400,7 @@ async def noter(interaction: discord.Interaction, id: int, note: int):
     if note < 0 or note > 10:
         await interaction.response.send_message("La note doit être comprise entre 0 et 10.", ephemeral=True)
         return
+
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT title FROM contents WHERE id = %s AND user_id = %s", (id, str(interaction.user.id)))
@@ -379,6 +410,7 @@ async def noter(interaction: discord.Interaction, id: int, note: int):
         cur.close()
         conn.close()
         return
+
     cur.execute("UPDATE contents SET rating = %s WHERE id = %s AND user_id = %s", (note, id, str(interaction.user.id)))
     conn.commit()
     cur.close()

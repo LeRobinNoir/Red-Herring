@@ -105,7 +105,7 @@ class AddContentView(discord.ui.View):
             discord.SelectOption(label="Manga", description="Ajouter un manga")
         ]
     )
-    async def select_type(self, select: discord.ui.Select, interaction: discord.Interaction):
+    async def select_type(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.selected_type = select.values[0]
         await interaction.response.send_message(
             f"Type sélectionné : **{self.selected_type} {TYPE_EMOJIS.get(self.selected_type, '')}**", 
@@ -122,7 +122,7 @@ class AddContentView(discord.ui.View):
             discord.SelectOption(label="Terminé", description="Contenu terminé")
         ]
     )
-    async def select_status(self, select: discord.ui.Select, interaction: discord.Interaction):
+    async def select_status(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.selected_status = select.values[0]
         await interaction.response.send_message(
             f"Statut sélectionné : **{self.selected_status} {STATUS_EMOJIS.get(self.selected_status, '')}**", 
@@ -234,10 +234,10 @@ async def modifier(interaction: discord.Interaction, id: int):
                 discord.SelectOption(label="Terminé", description="Contenu terminé")
             ]
         )
-        async def select_new_status(self, select: discord.ui.Select, interaction: discord.Interaction):
+        async def select_new_status(self, interaction: discord.Interaction, select: discord.ui.Select):
             self.new_status = select.values[0]
             await interaction.response.send_message(
-                f"Nouveau statut sélectionné : **{self.new_status} {STATUS_EMOJIS.get(self.new_status, '')}**", 
+                f"Nouveau statut sélectionné : **{self.new_status} {STATUS_EMOJIS.get(self.new_status, '')}**",
                 ephemeral=True
             )
 
@@ -246,12 +246,12 @@ async def modifier(interaction: discord.Interaction, id: int):
             if self.new_status is None:
                 await interaction.response.send_message("Merci de sélectionner un nouveau statut.", ephemeral=True)
                 return
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute("UPDATE contents SET status = %s WHERE id = %s AND user_id = %s", (self.new_status, self.content_id, str(interaction.user.id)))
-            conn.commit()
-            cur.close()
-            conn.close()
+            conn2 = get_db_connection()
+            cur2 = conn2.cursor()
+            cur2.execute("UPDATE contents SET status = %s WHERE id = %s AND user_id = %s", (self.new_status, self.content_id, str(interaction.user.id)))
+            conn2.commit()
+            cur2.close()
+            conn2.close()
             await interaction.response.send_message("Statut mis à jour avec succès !", ephemeral=True)
             self.stop()
 
@@ -280,11 +280,9 @@ async def modifier(interaction: discord.Interaction, id: int):
 ])
 async def supprimer(interaction: discord.Interaction, member: discord.Member = None, content_type: str = None, status: str = None):
     target = member or interaction.user
-
     if target.id != interaction.user.id and not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("Vous ne pouvez supprimer que vos propres contenus.", ephemeral=True)
         return
-
     conn = get_db_connection()
     cur = conn.cursor()
     query = "SELECT id, title, content_type, status FROM contents WHERE user_id = %s"
@@ -299,7 +297,6 @@ async def supprimer(interaction: discord.Interaction, member: discord.Member = N
     rows = cur.fetchall()
     cur.close()
     conn.close()
-
     if not rows:
         await interaction.response.send_message("Aucun contenu correspondant n'a été trouvé.", ephemeral=True)
         return
@@ -327,8 +324,8 @@ async def supprimer(interaction: discord.Interaction, member: discord.Member = N
             self.select.callback = self.select_callback
             self.add_item(self.select)
 
-        async def select_callback(self, interaction: discord.Interaction):
-            self.selected_ids = self.select.values
+        async def select_callback(self, interaction: discord.Interaction, select: discord.ui.Select):
+            self.selected_ids = select.values
             await interaction.response.send_message(f"{len(self.selected_ids)} contenu(s) sélectionné(s) pour suppression.", ephemeral=True)
 
         @discord.ui.button(label="Confirmer suppression", style=discord.ButtonStyle.red)
@@ -336,13 +333,13 @@ async def supprimer(interaction: discord.Interaction, member: discord.Member = N
             if not self.selected_ids:
                 await interaction.response.send_message("Aucun contenu sélectionné.", ephemeral=True)
                 return
-            conn = get_db_connection()
-            cur = conn.cursor()
+            conn2 = get_db_connection()
+            cur2 = conn2.cursor()
             for entry_id in self.selected_ids:
-                cur.execute("DELETE FROM contents WHERE id = %s AND user_id = %s", (entry_id, str(target.id)))
-            conn.commit()
-            cur.close()
-            conn.close()
+                cur2.execute("DELETE FROM contents WHERE id = %s AND user_id = %s", (entry_id, str(target.id)))
+            conn2.commit()
+            cur2.close()
+            conn2.close()
             await interaction.response.send_message("Contenu(s) supprimé(s) avec succès.", ephemeral=True)
             self.stop()
 
@@ -354,7 +351,6 @@ async def noter(interaction: discord.Interaction, id: int, note: int):
     if note < 0 or note > 10:
         await interaction.response.send_message("La note doit être comprise entre 0 et 10.", ephemeral=True)
         return
-
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT title FROM contents WHERE id = %s AND user_id = %s", (id, str(interaction.user.id)))
@@ -364,7 +360,6 @@ async def noter(interaction: discord.Interaction, id: int, note: int):
         cur.close()
         conn.close()
         return
-
     cur.execute("UPDATE contents SET rating = %s WHERE id = %s AND user_id = %s", (note, id, str(interaction.user.id)))
     conn.commit()
     cur.close()

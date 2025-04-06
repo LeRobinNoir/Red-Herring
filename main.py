@@ -3,6 +3,30 @@ from discord import app_commands
 from discord.ext import commands
 import sqlite3
 import os
+import threading
+from flask import Flask
+
+# ===============================
+# Section : Serveur web minimal
+# ===============================
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Le bot est en ligne !"
+
+def run_web():
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host="0.0.0.0", port=port)
+
+def keep_alive():
+    t = threading.Thread(target=run_web)
+    t.start()
+
+# ===============================
+# Section : Initialisation de la DB
+# ===============================
 
 # Dictionnaires d'emojis pour une meilleure lisibilité
 TYPE_EMOJIS = {
@@ -24,7 +48,7 @@ DB_PATH = 'contents.db'
 def init_db():
     """
     Initialise la base de données en créant la table 'contents' si elle n'existe pas.
-    La table inclut maintenant un champ 'rating' pour la note sur 10.
+    La table inclut un champ 'rating' pour la note sur 10.
     """
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -41,7 +65,11 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Récupérer le token du bot depuis les variables d'environnement (pour Railway)
+# ===============================
+# Section : Configuration du bot
+# ===============================
+
+# Récupérer le token du bot depuis les variables d'environnement
 TOKEN = os.getenv("DISCORD_TOKEN")
 if TOKEN is None:
     raise Exception("Le token Discord n'a pas été défini dans les variables d'environnement.")
@@ -53,20 +81,18 @@ intents.message_content = True  # Nécessaire pour lire le contenu des messages
 # Création du bot
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-#############################
-# Vues interactives (UI)
-#############################
+# ===============================
+# Section : Vues interactives (UI)
+# ===============================
 
 class AddContentView(discord.ui.View):
     """
     Vue interactive pour ajouter un contenu (ou plusieurs) via des menus déroulants.
-    - Si `multiple` est False, on ajoute un seul contenu (le titre est fourni).
-    - Sinon, `titles` est une liste de titres à ajouter.
     """
     def __init__(self, user_id, title, multiple=False, titles=None):
         super().__init__()
         self.user_id = user_id
-        self.title = title      # Titre unique pour un ajout simple
+        self.title = title      # Titre pour un ajout simple
         self.titles = titles    # Liste de titres pour un ajout multiple
         self.multiple = multiple
         self.selected_type = None
@@ -109,7 +135,6 @@ class AddContentView(discord.ui.View):
 
     @discord.ui.button(label="Confirmer", style=discord.ButtonStyle.green)
     async def confirm(self, button: discord.ui.Button, interaction: discord.Interaction):
-        # Vérifier que le type et le statut ont bien été sélectionnés
         if self.selected_type is None or self.selected_status is None:
             await interaction.response.send_message("Merci de sélectionner le type et le statut.", ephemeral=True)
             return
@@ -122,7 +147,7 @@ class AddContentView(discord.ui.View):
         else:
             for t in self.titles:
                 t = t.strip()
-                if t:  # Ignorer les titres vides
+                if t:
                     c.execute("INSERT INTO contents (user_id, title, content_type, status) VALUES (?, ?, ?, ?)",
                               (self.user_id, t, self.selected_type, self.selected_status))
         conn.commit()
@@ -130,16 +155,12 @@ class AddContentView(discord.ui.View):
         await interaction.response.send_message("Contenu(s) ajouté(s) avec succès !", ephemeral=True)
         self.stop()
 
-#############################
-# Commandes Slash du bot
-#############################
+# ===============================
+# Section : Commandes Slash
+# ===============================
 
 @bot.tree.command(name="ajouter", description="Ajouter un contenu")
 async def ajouter(interaction: discord.Interaction, title: str):
-    """
-    Commande slash pour ajouter un seul contenu.
-    Exemple : /ajouter title:"NomDeLaSérie"
-    """
     view = AddContentView(user_id=str(interaction.user.id), title=title)
     await interaction.response.send_message(
         f"Ajout du contenu : **{title}**\nSélectionne le type et le statut :", 
@@ -148,11 +169,6 @@ async def ajouter(interaction: discord.Interaction, title: str):
 
 @bot.tree.command(name="ajouterplus", description="Ajouter plusieurs contenus")
 async def ajouterplus(interaction: discord.Interaction, titles: str):
-    """
-    Commande slash pour ajouter plusieurs contenus à la fois.
-    Les titres doivent être séparés par des virgules.
-    Exemple : /ajouterplus titles:"Série1, Série2, Série3"
-    """
     title_list = titles.split(',')
     view = AddContentView(user_id=str(interaction.user.id), title=None, multiple=True, titles=title_list)
     titles_clean = ', '.join([t.strip() for t in title_list if t.strip()])
@@ -163,10 +179,6 @@ async def ajouterplus(interaction: discord.Interaction, titles: str):
 
 @bot.tree.command(name="liste", description="Afficher la liste de contenus d'un utilisateur")
 async def liste(interaction: discord.Interaction, member: discord.Member = None):
-    """
-    Commande slash pour afficher la liste des contenus d'un utilisateur.
-    Exemple : /liste ou /liste member:@Utilisateur
-    """
     target = member or interaction.user
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -190,10 +202,6 @@ async def liste(interaction: discord.Interaction, member: discord.Member = None)
 
 @bot.tree.command(name="modifier", description="Modifier le statut d'un contenu par ID")
 async def modifier(interaction: discord.Interaction, id: int):
-    """
-    Commande slash pour modifier le statut d'un contenu à partir de son ID.
-    Exemple : /modifier id:3
-    """
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT title, content_type, status FROM contents WHERE id=? AND user_id=?", (id, str(interaction.user.id)))
@@ -206,7 +214,6 @@ async def modifier(interaction: discord.Interaction, id: int):
     conn.close()
 
     class ModifierStatusView(discord.ui.View):
-        """Vue interactive pour modifier le statut d'un contenu."""
         def __init__(self, user_id, content_id):
             super().__init__()
             self.user_id = user_id
@@ -267,15 +274,8 @@ async def modifier(interaction: discord.Interaction, id: int):
     app_commands.Choice(name="Terminé ✅", value="Terminé")
 ])
 async def supprimer(interaction: discord.Interaction, member: discord.Member = None, content_type: str = None, status: str = None):
-    """
-    Commande slash pour supprimer du contenu en filtrant par type et/ou statut.
-    Seul l'utilisateur propriétaire de son contenu (sauf s'il est administrateur) peut le supprimer.
-    Exemple : /supprimer content_type:"Série" status:"En cours"
-    """
-    # Par défaut, on prend l'utilisateur qui exécute la commande
     target = member or interaction.user
 
-    # Vérification des permissions pour supprimer le contenu d'autrui
     if target.id != interaction.user.id and not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("Vous ne pouvez supprimer que vos propres contenus.", ephemeral=True)
         return
@@ -298,11 +298,10 @@ async def supprimer(interaction: discord.Interaction, member: discord.Member = N
         await interaction.response.send_message("Aucun contenu correspondant n'a été trouvé.", ephemeral=True)
         return
 
-    # Vue interactive pour sélectionner les contenus à supprimer
     class DeleteContentView(discord.ui.View):
         def __init__(self, entries):
             super().__init__()
-            self.entries = entries  # Liste de tuples (id, title, content_type, status)
+            self.entries = entries
             self.selected_ids = []
             options = []
             for entry in entries:
@@ -342,10 +341,6 @@ async def supprimer(interaction: discord.Interaction, member: discord.Member = N
 
 @bot.tree.command(name="noter", description="Attribuer une note à un contenu (sur 10)")
 async def noter(interaction: discord.Interaction, id: int, note: int):
-    """
-    Commande slash pour noter un contenu. L'utilisateur peut donner une note entre 0 et 10.
-    Exemple : /noter id:3 note:8
-    """
     if note < 0 or note > 10:
         await interaction.response.send_message("La note doit être comprise entre 0 et 10.", ephemeral=True)
         return
@@ -364,13 +359,13 @@ async def noter(interaction: discord.Interaction, id: int, note: int):
     conn.close()
     await interaction.response.send_message(f"Contenu noté **{note}/10** avec succès !", ephemeral=True)
 
-#############################
-# Évènement on_ready
-#############################
+# ===============================
+# Section : Démarrage du bot et du serveur web
+# ===============================
 
 @bot.event
 async def on_ready():
-    init_db()  # Initialisation de la base de données au démarrage du bot
+    init_db()
     try:
         synced = await bot.tree.sync()
         print(f"Synchronisation réussie pour {len(synced)} commande(s).")
@@ -378,8 +373,6 @@ async def on_ready():
         print(e)
     print(f"Bot connecté en tant que {bot.user}")
 
-#############################
-# Démarrage du bot
-#############################
-
+# Lancer le serveur web minimal (pour Railway) et le bot Discord
+keep_alive()
 bot.run(TOKEN)

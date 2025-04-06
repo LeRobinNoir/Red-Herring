@@ -1,15 +1,14 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import sqlite3
-import os
-import threading
+import os, threading
 from flask import Flask
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 # ===============================
-# Section : Serveur web minimal
+# Serveur web minimal (pour Railway)
 # ===============================
-
 app = Flask(__name__)
 
 @app.route("/")
@@ -25,10 +24,35 @@ def keep_alive():
     t.start()
 
 # ===============================
-# Section : Initialisation de la DB
+# Configuration de la base de données PostgreSQL
 # ===============================
+DATABASE_URL = os.getenv("DATABASE_URL")
+if DATABASE_URL is None:
+    raise Exception("DATABASE_URL n'est pas défini dans les variables d'environnement.")
 
-# Dictionnaires d'emojis pour une meilleure lisibilité
+def get_db_connection():
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+
+def init_db():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS contents (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT,
+            title TEXT,
+            content_type TEXT,
+            status TEXT,
+            rating INTEGER
+        );
+    ''')
+    conn.commit()
+    cur.close()
+    conn.close()
+
+# ===============================
+# Dictionnaires d'emojis
+# ===============================
 TYPE_EMOJIS = {
     "Série": "📺",
     "Animé": "🎥",
@@ -42,49 +66,21 @@ STATUS_EMOJIS = {
     "Terminé": "✅"
 }
 
-# Chemin vers la base de données SQLite
-DB_PATH = 'contents.db'
-
-def init_db():
-    """
-    Initialise la base de données en créant la table 'contents' si elle n'existe pas.
-    La table inclut un champ 'rating' pour la note sur 10.
-    """
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS contents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
-            title TEXT,
-            content_type TEXT,
-            status TEXT,
-            rating INTEGER
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
 # ===============================
-# Section : Configuration du bot
+# Configuration du bot Discord
 # ===============================
-
-# Récupérer le token du bot depuis les variables d'environnement
 TOKEN = os.getenv("DISCORD_TOKEN")
 if TOKEN is None:
-    raise Exception("Le token Discord n'a pas été défini dans les variables d'environnement.")
+    raise Exception("DISCORD_TOKEN n'est pas défini dans les variables d'environnement.")
 
-# Configuration des intents pour le bot
 intents = discord.Intents.default()
 intents.message_content = True  # Nécessaire pour lire le contenu des messages
 
-# Création du bot
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ===============================
-# Section : Vues interactives (UI)
+# Vues interactives (UI)
 # ===============================
-
 class AddContentView(discord.ui.View):
     """
     Vue interactive pour ajouter un contenu (ou plusieurs) via des menus déroulants.
@@ -139,26 +135,26 @@ class AddContentView(discord.ui.View):
             await interaction.response.send_message("Merci de sélectionner le type et le statut.", ephemeral=True)
             return
 
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
+        conn = get_db_connection()
+        cur = conn.cursor()
         if not self.multiple:
-            c.execute("INSERT INTO contents (user_id, title, content_type, status) VALUES (?, ?, ?, ?)",
-                      (self.user_id, self.title, self.selected_type, self.selected_status))
+            cur.execute("INSERT INTO contents (user_id, title, content_type, status) VALUES (%s, %s, %s, %s)",
+                        (self.user_id, self.title, self.selected_type, self.selected_status))
         else:
             for t in self.titles:
                 t = t.strip()
                 if t:
-                    c.execute("INSERT INTO contents (user_id, title, content_type, status) VALUES (?, ?, ?, ?)",
-                              (self.user_id, t, self.selected_type, self.selected_status))
+                    cur.execute("INSERT INTO contents (user_id, title, content_type, status) VALUES (%s, %s, %s, %s)",
+                                (self.user_id, t, self.selected_type, self.selected_status))
         conn.commit()
+        cur.close()
         conn.close()
         await interaction.response.send_message("Contenu(s) ajouté(s) avec succès !", ephemeral=True)
         self.stop()
 
 # ===============================
-# Section : Commandes Slash
+# Commandes Slash du bot
 # ===============================
-
 @bot.tree.command(name="ajouter", description="Ajouter un contenu")
 async def ajouter(interaction: discord.Interaction, title: str):
     view = AddContentView(user_id=str(interaction.user.id), title=title)
@@ -180,10 +176,11 @@ async def ajouterplus(interaction: discord.Interaction, titles: str):
 @bot.tree.command(name="liste", description="Afficher la liste de contenus d'un utilisateur")
 async def liste(interaction: discord.Interaction, member: discord.Member = None):
     target = member or interaction.user
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id, title, content_type, status, rating FROM contents WHERE user_id=?", (str(target.id),))
-    rows = c.fetchall()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, title, content_type, status, rating FROM contents WHERE user_id = %s", (str(target.id),))
+    rows = cur.fetchall()
+    cur.close()
     conn.close()
     if not rows:
         await interaction.response.send_message(f"{target.display_name} n'a aucun contenu dans sa liste.", ephemeral=True)
@@ -191,7 +188,11 @@ async def liste(interaction: discord.Interaction, member: discord.Member = None)
 
     embed = discord.Embed(title=f"Liste de contenus de {target.display_name}", color=0x3498db)
     for row in rows:
-        entry_id, title, content_type, status, rating = row
+        entry_id = row['id']
+        title = row['title']
+        content_type = row['content_type']
+        status = row['status']
+        rating = row['rating']
         note_str = f" | Note : **{rating}/10**" if rating is not None else ""
         embed.add_field(
             name=f"{title} {TYPE_EMOJIS.get(content_type, '')}",
@@ -202,15 +203,18 @@ async def liste(interaction: discord.Interaction, member: discord.Member = None)
 
 @bot.tree.command(name="modifier", description="Modifier le statut d'un contenu par ID")
 async def modifier(interaction: discord.Interaction, id: int):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT title, content_type, status FROM contents WHERE id=? AND user_id=?", (id, str(interaction.user.id)))
-    row = c.fetchone()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT title, content_type, status FROM contents WHERE id = %s AND user_id = %s", (id, str(interaction.user.id)))
+    row = cur.fetchone()
     if not row:
         await interaction.response.send_message("Contenu non trouvé ou vous n'êtes pas le propriétaire de ce contenu.", ephemeral=True)
+        cur.close()
         conn.close()
         return
-    title, content_type, current_status = row
+    title = row['title']
+    current_status = row['status']
+    cur.close()
     conn.close()
 
     class ModifierStatusView(discord.ui.View):
@@ -242,17 +246,18 @@ async def modifier(interaction: discord.Interaction, id: int):
             if self.new_status is None:
                 await interaction.response.send_message("Merci de sélectionner un nouveau statut.", ephemeral=True)
                 return
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("UPDATE contents SET status=? WHERE id=? AND user_id=?", (self.new_status, self.content_id, str(interaction.user.id)))
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("UPDATE contents SET status = %s WHERE id = %s AND user_id = %s", (self.new_status, self.content_id, str(interaction.user.id)))
             conn.commit()
+            cur.close()
             conn.close()
             await interaction.response.send_message("Statut mis à jour avec succès !", ephemeral=True)
             self.stop()
 
     view = ModifierStatusView(user_id=str(interaction.user.id), content_id=id)
     await interaction.response.send_message(
-        f"Modification du statut pour **{title}** (Actuel : {current_status} {STATUS_EMOJIS.get(current_status, '')}). Sélectionne le nouveau statut :", 
+        f"Modification du statut pour **{title}** (Actuel : {current_status} {STATUS_EMOJIS.get(current_status, '')}). Sélectionne le nouveau statut :",
         view=view
     )
 
@@ -280,18 +285,19 @@ async def supprimer(interaction: discord.Interaction, member: discord.Member = N
         await interaction.response.send_message("Vous ne pouvez supprimer que vos propres contenus.", ephemeral=True)
         return
 
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    query = "SELECT id, title, content_type, status FROM contents WHERE user_id=?"
+    conn = get_db_connection()
+    cur = conn.cursor()
+    query = "SELECT id, title, content_type, status FROM contents WHERE user_id = %s"
     params = [str(target.id)]
     if content_type is not None:
-        query += " AND content_type=?"
+        query += " AND content_type = %s"
         params.append(content_type)
     if status is not None:
-        query += " AND status=?"
+        query += " AND status = %s"
         params.append(status)
-    c.execute(query, tuple(params))
-    rows = c.fetchall()
+    cur.execute(query, tuple(params))
+    rows = cur.fetchall()
+    cur.close()
     conn.close()
 
     if not rows:
@@ -305,14 +311,17 @@ async def supprimer(interaction: discord.Interaction, member: discord.Member = N
             self.selected_ids = []
             options = []
             for entry in entries:
-                entry_id, title, c_type, c_status = entry
+                entry_id = entry['id']
+                title = entry['title']
+                c_type = entry['content_type']
+                c_status = entry['status']
                 label = f"{entry_id} - {title}"
                 description = f"Type: {c_type} {TYPE_EMOJIS.get(c_type, '')} | Statut: {c_status} {STATUS_EMOJIS.get(c_status, '')}"
                 options.append(discord.SelectOption(label=label, value=str(entry_id), description=description))
             self.select = discord.ui.Select(
-                placeholder="Sélectionnez les contenus à supprimer", 
-                min_values=1, 
-                max_values=len(options), 
+                placeholder="Sélectionnez les contenus à supprimer",
+                min_values=1,
+                max_values=len(options),
                 options=options
             )
             self.select.callback = self.select_callback
@@ -327,11 +336,12 @@ async def supprimer(interaction: discord.Interaction, member: discord.Member = N
             if not self.selected_ids:
                 await interaction.response.send_message("Aucun contenu sélectionné.", ephemeral=True)
                 return
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
+            conn = get_db_connection()
+            cur = conn.cursor()
             for entry_id in self.selected_ids:
-                c.execute("DELETE FROM contents WHERE id=? AND user_id=?", (entry_id, str(target.id)))
+                cur.execute("DELETE FROM contents WHERE id = %s AND user_id = %s", (entry_id, str(target.id)))
             conn.commit()
+            cur.close()
             conn.close()
             await interaction.response.send_message("Contenu(s) supprimé(s) avec succès.", ephemeral=True)
             self.stop()
@@ -345,24 +355,25 @@ async def noter(interaction: discord.Interaction, id: int, note: int):
         await interaction.response.send_message("La note doit être comprise entre 0 et 10.", ephemeral=True)
         return
 
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT title FROM contents WHERE id=? AND user_id=?", (id, str(interaction.user.id)))
-    row = c.fetchone()
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT title FROM contents WHERE id = %s AND user_id = %s", (id, str(interaction.user.id)))
+    row = cur.fetchone()
     if not row:
         await interaction.response.send_message("Contenu non trouvé ou vous n'êtes pas le propriétaire de ce contenu.", ephemeral=True)
+        cur.close()
         conn.close()
         return
 
-    c.execute("UPDATE contents SET rating=? WHERE id=? AND user_id=?", (note, id, str(interaction.user.id)))
+    cur.execute("UPDATE contents SET rating = %s WHERE id = %s AND user_id = %s", (note, id, str(interaction.user.id)))
     conn.commit()
+    cur.close()
     conn.close()
     await interaction.response.send_message(f"Contenu noté **{note}/10** avec succès !", ephemeral=True)
 
 # ===============================
-# Section : Démarrage du bot et du serveur web
+# Démarrage du bot et du serveur web
 # ===============================
-
 @bot.event
 async def on_ready():
     init_db()
@@ -373,6 +384,5 @@ async def on_ready():
         print(e)
     print(f"Bot connecté en tant que {bot.user}")
 
-# Lancer le serveur web minimal (pour Railway) et le bot Discord
 keep_alive()
 bot.run(TOKEN)

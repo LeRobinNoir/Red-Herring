@@ -88,7 +88,7 @@ class AddContentView(discord.ui.View):
     def __init__(self, user_id, title, multiple=False, titles=None):
         super().__init__()
         self.user_id = user_id
-        self.title = title      # Titre pour un ajout simple
+        self.title = title      # Titre pour un ajout simple (None pour ajouter plusieurs)
         self.titles = titles    # Liste de titres pour un ajout multiple
         self.multiple = multiple
         self.selected_type = None
@@ -107,6 +107,7 @@ class AddContentView(discord.ui.View):
     )
     async def select_type(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.selected_type = select.values[0]
+        # Confirmation de la sélection (éphémère)
         await interaction.response.send_message(
             f"Type sélectionné : **{self.selected_type} {TYPE_EMOJIS.get(self.selected_type, '')}**", 
             ephemeral=True
@@ -124,6 +125,7 @@ class AddContentView(discord.ui.View):
     )
     async def select_status(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.selected_status = select.values[0]
+        # Confirmation de la sélection (éphémère)
         await interaction.response.send_message(
             f"Statut sélectionné : **{self.selected_status} {STATUS_EMOJIS.get(self.selected_status, '')}**", 
             ephemeral=True
@@ -131,25 +133,42 @@ class AddContentView(discord.ui.View):
 
     @discord.ui.button(label="Confirmer", style=discord.ButtonStyle.green)
     async def confirm(self, button: discord.ui.Button, interaction: discord.Interaction):
+        # Vérifie que les sélections ont été faites
         if self.selected_type is None or self.selected_status is None:
             await interaction.response.send_message("Merci de sélectionner le type et le statut.", ephemeral=True)
             return
 
+        # Insertion en base de données
         conn = get_db_connection()
         cur = conn.cursor()
         if not self.multiple:
             cur.execute("INSERT INTO contents (user_id, title, content_type, status) VALUES (%s, %s, %s, %s)",
                         (self.user_id, self.title, self.selected_type, self.selected_status))
+            content_title = self.title
         else:
+            titles_added = []
             for t in self.titles:
                 t = t.strip()
                 if t:
                     cur.execute("INSERT INTO contents (user_id, title, content_type, status) VALUES (%s, %s, %s, %s)",
                                 (self.user_id, t, self.selected_type, self.selected_status))
+                    titles_added.append(t)
+            content_title = ", ".join(titles_added)
         conn.commit()
         cur.close()
         conn.close()
-        await interaction.response.send_message("Contenu(s) ajouté(s) avec succès !", ephemeral=True)
+
+        # Création d'un embed public affichant le contenu ajouté
+        embed = discord.Embed(
+            title="Nouveau contenu ajouté",
+            description=f"**{content_title}**",
+            color=0x3498db
+        )
+        embed.add_field(name="Type", value=f"{self.selected_type} {TYPE_EMOJIS.get(self.selected_type, '')}", inline=True)
+        embed.add_field(name="Statut", value=f"{self.selected_status} {STATUS_EMOJIS.get(self.selected_status, '')}", inline=True)
+
+        # Envoi du message public pour que tout le monde voie l'ajout
+        await interaction.response.send_message(embed=embed)
         self.stop()
 
 # ===============================
@@ -237,7 +256,7 @@ async def modifier(interaction: discord.Interaction, id: int):
         async def select_new_status(self, interaction: discord.Interaction, select: discord.ui.Select):
             self.new_status = select.values[0]
             await interaction.response.send_message(
-                f"Nouveau statut sélectionné : **{self.new_status} {STATUS_EMOJIS.get(self.new_status, '')}**",
+                f"Nouveau statut sélectionné : **{self.new_status} {STATUS_EMOJIS.get(self.new_status, '')}**", 
                 ephemeral=True
             )
 

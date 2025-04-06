@@ -350,7 +350,6 @@ async def noter(interaction: discord.Interaction, id: int, note: int):
         await interaction.response.send_message("La note doit être comprise entre 0 et 10.", ephemeral=True)
         return
 
-    # Vérification que le contenu appartient à l'utilisateur
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT title FROM contents WHERE id=? AND user_id=?", (id, str(interaction.user.id)))

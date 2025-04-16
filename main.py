@@ -186,24 +186,67 @@ async def modifier(interaction: discord.Interaction,id:int,statut:app_commands.C
 
 # /modifiermulti
 class MultiModifyView(discord.ui.View):
-    def __init__(self,entries,user_id):super().__init__(timeout=120);self.entries=entries;self.user_id=user_id;self.sel=[];self.new=None
-    @discord.ui.select(placeholder="Choisir contenus",min_values=1,max_values=5,
-        options=[discord.SelectOption(label=f"{e['title']} (#{e['id']})",value=str(e['id'])) for e in entries])
-    async def sel_items(self,i,s):self.sel=[int(v) for v in s.values];await i.response.send_message(f"{len(self.sel)} sél.",ephemeral=True)
-    @discord.ui.select(placeholder="Nouveau statut",min_values=1,max_values=1,
-        options=[discord.SelectOption(label=s,value=s) for s in STATUS_EMOJIS])
-    async def sel_stat(self,i,s):self.new=s.values[0];await i.response.send_message(f"Statut {self.new}",ephemeral=True)
-    @discord.ui.button(label="OK",style=discord.ButtonStyle.green)
-    async def ok(self,i,b):
-        if not self.sel or not self.new:return await i.response.send_message("Requis.",ephemeral=True)
-        for cid in self.sel:await bot.pool.execute("UPDATE contents SET status=$1 WHERE id=$2 AND user_id=$3",self.new,cid,self.user_id)
-        await i.response.send_message(f"{len(self.sel)} faits.",ephemeral=True);self.stop()
+    def __init__(self, entries: List[Dict], user_id: str):
+        super().__init__(timeout=120)
+        self.entries = entries
+        self.user_id = user_id
+        self.selected: List[int] = []
+        self.new_status: Optional[str] = None
 
-@bot.tree.command(name="modifiermulti",description="Modifier plusieurs")
-async def modifiermulti(i:discord.Interaction):
-    rows=await bot.pool.fetch("SELECT id,title FROM contents WHERE user_id=$1 ORDER BY id",str(i.user.id))
-    if not rows:return await i.response.send_message("Rien.",ephemeral=True)
-    await i.response.send_message("Choose:",view=MultiModifyView([dict(r) for r in rows],str(i.user.id)))
+        # Select for entries
+        entry_options = [discord.SelectOption(label=f"{e['title']} (#{e['id']})", value=str(e['id'])) for e in entries]
+        select_entries = discord.ui.Select(
+            placeholder="Sélectionne contenus", min_values=1, max_values=len(entry_options), options=entry_options
+        )
+        select_entries.callback = self.select_items
+        self.add_item(select_entries)
+
+        # Select for status
+        status_options = [discord.SelectOption(label=s, value=s) for s in STATUS_EMOJIS]
+        select_status = discord.ui.Select(
+            placeholder="Nouveau statut", min_values=1, max_values=1, options=status_options
+        )
+        select_status.callback = self.select_status
+        self.add_item(select_status)
+
+        # Confirm button
+        confirm_button = discord.ui.Button(label="Confirmer", style=discord.ButtonStyle.green)
+        confirm_button.callback = self.confirm
+        self.add_item(confirm_button)
+
+    async def select_items(self, interaction: discord.Interaction, select: discord.ui.Select):
+        self.selected = [int(v) for v in select.values]
+        await interaction.response.send_message(f"{len(self.selected)} sélectionnés", ephemeral=True)
+
+    async def select_status(self, interaction: discord.Interaction, select: discord.ui.Select):
+        self.new_status = select.values[0]
+        await interaction.response.send_message(f"Statut = {self.new_status}", ephemeral=True)
+
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected or not self.new_status:
+            return await interaction.response.send_message("Requis.", ephemeral=True)
+        for cid in self.selected:
+            await bot.pool.execute(
+                "UPDATE contents SET status=$1 WHERE id=$2 AND user_id=$3",
+                self.new_status, cid, self.user_id
+            )
+        await interaction.response.send_message(
+            f"{len(self.selected)} mis à jour en {self.new_status}",
+            ephemeral=True
+        )
+        self.stop()
+
+@bot.tree.command(name="modifiermulti", description="Modifier plusieurs statuts")
+async def modifiermulti(interaction: discord.Interaction):
+    # Fetch user entries
+    rows = await bot.pool.fetch(
+        "SELECT id, title FROM contents WHERE user_id=$1 ORDER BY id",
+        str(interaction.user.id)
+    )
+    if not rows:
+        return await interaction.response.send_message("Rien à modifier.", ephemeral=True)
+    view = MultiModifyView(entries=[dict(r) for r in rows], user_id=str(interaction.user.id))
+    await interaction.response.send_message("Choisis et confirme :", view=view)
 
 # /noter
 @bot.tree.command(name="noter",description="Noter 0-10")

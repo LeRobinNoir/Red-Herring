@@ -1,7 +1,8 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import os, threading
+import os
+import threading
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from flask import Flask
@@ -61,7 +62,7 @@ if DATABASE_URL is None:
     raise Exception("La variable DATABASE_URL n'est pas définie.")
 
 # -------------------------------
-# Connexion à PostgreSQL et initialisation de la base
+# Connexion à PostgreSQL et initialisation de la base de données
 # -------------------------------
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
@@ -117,7 +118,7 @@ async def on_ready():
         print(f"Erreur de synchronisation : {e}")
 
 # -------------------------------
-# Commande : /ajouter (Ajouter un contenu unique)
+# Commande : /ajouter - Ajouter un contenu unique
 # -------------------------------
 @bot.tree.command(name="ajouter", description="Ajouter un contenu (titre, type, statut)")
 @app_commands.describe(
@@ -126,14 +127,14 @@ async def on_ready():
     statut="Statut du contenu (ex: En cours, À voir, Terminé)"
 )
 async def ajouter(interaction: discord.Interaction, titre: str, type: str, statut: str):
-    type_normalized = normalize_type(type)
-    statut_normalized = normalize_status(statut)
+    type_norm = normalize_type(type)
+    statut_norm = normalize_status(statut)
     user_id = str(interaction.user.id)
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO contents (user_id, title, content_type, status) VALUES (%s, %s, %s, %s)",
-        (user_id, titre, type_normalized, statut_normalized)
+        (user_id, titre, type_norm, statut_norm)
     )
     conn.commit()
     cur.close()
@@ -143,19 +144,19 @@ async def ajouter(interaction: discord.Interaction, titre: str, type: str, statu
         description=f"**{titre}**",
         color=0x3498db
     )
-    embed.add_field(name="Type", value=f"{type_normalized} {TYPE_EMOJIS.get(type_normalized, '')}", inline=True)
-    embed.add_field(name="Statut", value=f"{statut_normalized} {STATUS_EMOJIS.get(statut_normalized, '')}", inline=True)
+    embed.add_field(name="Type", value=f"{type_norm} {TYPE_EMOJIS.get(type_norm, '')}", inline=True)
+    embed.add_field(name="Statut", value=f"{statut_norm} {STATUS_EMOJIS.get(statut_norm, '')}", inline=True)
     await interaction.response.send_message(embed=embed)
 
 # -------------------------------
-# Commande : /liste (Afficher la liste avec filtres et classement par note)
+# Commande : /liste - Afficher la liste avec filtres et classement par note
 # -------------------------------
-@bot.tree.command(name="liste", description="Afficher la liste de contenus. Filtrez par catégorie, statut ou notes.")
+@bot.tree.command(name="liste", description="Afficher la liste de contenus. Filtrez par catégorie, statut ou note.")
 @app_commands.describe(
     member="Afficher la liste d'un autre utilisateur (optionnel)",
     categorie="Filtrer par type (ex: Manga, Animé, Webtoon, Série) (optionnel)",
     statut="Filtrer par statut (ex: En cours, À voir, Terminé) (optionnel)",
-    notes="Si vrai, affiche uniquement les contenus notés triés par note décroissante (optionnel, false par défaut)"
+    notes="Si vrai, affiche uniquement les contenus notés, triés par note décroissante (optionnel)"
 )
 async def liste(interaction: discord.Interaction, member: discord.Member = None, categorie: str = None, statut: str = None, notes: bool = False):
     target = member or interaction.user
@@ -165,13 +166,13 @@ async def liste(interaction: discord.Interaction, member: discord.Member = None,
     query = "SELECT id, title, content_type, status, rating FROM contents WHERE user_id = %s"
     params = [user_id]
     if categorie:
-        categorie_norm = normalize_type(categorie)
+        cat_norm = normalize_type(categorie)
         query += " AND content_type = %s"
-        params.append(categorie_norm)
+        params.append(cat_norm)
     if statut:
-        statut_norm = normalize_status(statut)
+        stat_norm = normalize_status(statut)
         query += " AND status = %s"
-        params.append(statut_norm)
+        params.append(stat_norm)
     if notes:
         query += " AND rating IS NOT NULL ORDER BY rating DESC, title"
     else:
@@ -190,8 +191,7 @@ async def liste(interaction: discord.Interaction, member: discord.Member = None,
     
     embed = discord.Embed(color=0x3498db)
     if notes:
-        embed.title = f"Contenus notés de {target.display_name} (classés par note décroissante)"
-        # Calcul du classement avec égalité
+        embed.title = f"Contenus notés de {target.display_name} (classement)"
         lines = []
         current_rank = 0
         index = 0
@@ -202,7 +202,7 @@ async def liste(interaction: discord.Interaction, member: discord.Member = None,
             if previous_rating is None or rating < previous_rating:
                 current_rank = index
             previous_rating = rating
-            # Si plusieurs contenus ont la même note, ils partagent le même rang
+            # Utiliser des émojis pour le top 3, sinon numéro
             if current_rank == 1:
                 rank_str = "🏆 Top 1"
             elif current_rank == 2:
@@ -232,7 +232,7 @@ async def liste(interaction: discord.Interaction, member: discord.Member = None,
     await interaction.response.send_message(embed=embed)
 
 # -------------------------------
-# Commande : /modifier (Modifier un contenu unique par ID)
+# Commande : /modifier - Modifier un contenu unique par ID
 # -------------------------------
 @bot.tree.command(name="modifier", description="Modifier le statut d'un contenu par ID")
 @app_commands.describe(
@@ -261,7 +261,7 @@ async def modifier(interaction: discord.Interaction, id: int, nouveau_statut: st
     await interaction.response.send_message(embed=embed)
 
 # -------------------------------
-# Commande : /noter (Attribuer une note sur 10 à un contenu)
+# Commande : /noter - Attribuer une note sur 10 à un contenu
 # -------------------------------
 @bot.tree.command(name="noter", description="Attribuer une note à un contenu (sur 10)")
 @app_commands.describe(
@@ -287,7 +287,7 @@ async def noter(interaction: discord.Interaction, id: int, note: int):
     await interaction.response.send_message(f"Contenu #{id} noté **{note}/10** avec succès !")
 
 # -------------------------------
-# Commande : /supprimer (Supprimer un ou plusieurs contenus)
+# Commande : /supprimer - Supprimer un ou plusieurs contenus
 # -------------------------------
 @bot.tree.command(name="supprimer", description="Supprimer un ou plusieurs contenus (IDs séparés par des virgules)")
 @app_commands.describe(
@@ -325,7 +325,7 @@ async def supprimer(interaction: discord.Interaction, ids: str):
         await interaction.response.send_message(embed=embed)
 
 # -------------------------------
-# Commande : /ajoutermulti (Ajouter plusieurs contenus via interaction)
+# Commande : /ajoutermulti - Ajouter plusieurs contenus via interaction
 # -------------------------------
 class ContentModal(discord.ui.Modal, title="Ajouter un contenu"):
     titre = discord.ui.TextInput(label="Titre", placeholder="Ex: One Piece", max_length=100)
@@ -387,12 +387,12 @@ class MultiAddView(discord.ui.View):
 async def ajoutermulti(interaction: discord.Interaction):
     view = MultiAddView(user_id=str(interaction.user.id))
     await interaction.response.send_message(
-        "Clique sur **Ajouter un contenu** pour saisir chaque contenu, puis sur **Confirmer tout** pour enregistrer le tout.",
+        "Cliquez sur **Ajouter un contenu** pour saisir chaque contenu, puis sur **Confirmer tout** pour enregistrer le tout.",
         view=view
     )
 
 # -------------------------------
-# Commande : /modifiermulti (Modifier plusieurs contenus simultanément)
+# Commande : /modifiermulti - Modifier plusieurs contenus simultanément
 # -------------------------------
 @bot.tree.command(name="modifiermulti", description="Modifier le statut de plusieurs contenus simultanément.")
 async def modifiermulti(interaction: discord.Interaction):
@@ -439,4 +439,32 @@ async def modifiermulti(interaction: discord.Interaction):
 
         @discord.ui.button(label="Confirmer modification", style=discord.ButtonStyle.green)
         async def confirm_modif(self, interaction: discord.Interaction, button: discord.ui.Button):
-            if not self.selected_ids_
+            if not self.selected_ids or not self.new_status:
+                await interaction.response.send_message("Veuillez sélectionner au moins un contenu ET un nouveau statut.", ephemeral=True)
+                return
+            conn2 = get_db_connection()
+            cur2 = conn2.cursor()
+            for cid in self.selected_ids:
+                cur2.execute("UPDATE contents SET status = %s WHERE id = %s AND user_id = %s", (self.new_status, cid, user_id))
+            conn2.commit()
+            cur2.close()
+            conn2.close()
+            embed = discord.Embed(
+                title="Modification multiple",
+                description=f"Les contenus avec les IDs : {', '.join(self.selected_ids)} ont été mis à jour en **{self.new_status}**.",
+                color=0x3498db
+            )
+            await interaction.response.send_message(embed=embed)
+            self.stop()
+
+    view = MultiModifyView()
+    await interaction.response.send_message(
+        "Sélectionnez les contenus à modifier, choisissez le nouveau statut, puis confirmez.",
+        view=view
+    )
+
+# -------------------------------
+# Lancement du bot et du serveur web
+# -------------------------------
+keep_alive()
+bot.run(TOKEN)

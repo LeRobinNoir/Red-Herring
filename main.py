@@ -1,15 +1,14 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import os
+import os, threading
 import psycopg2
 from psycopg2.extras import RealDictCursor
-import threading
 from flask import Flask
 
-# ===============================
-# Configuration Flask (mini-serveur pour Railway)
-# ===============================
+# -------------------------------
+# Configuration du serveur web (pour Railway)
+# -------------------------------
 app = Flask(__name__)
 
 @app.route("/")
@@ -24,9 +23,9 @@ def keep_alive():
     t = threading.Thread(target=run_web)
     t.start()
 
-# ===============================
-# Variables d'environnement
-# ===============================
+# -------------------------------
+# Récupération des variables d'environnement
+# -------------------------------
 TOKEN = os.getenv("DISCORD_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -35,16 +34,15 @@ if TOKEN is None:
 if DATABASE_URL is None:
     raise Exception("La variable DATABASE_URL n'est pas définie.")
 
-# ===============================
-# Connexion PostgreSQL et init DB
-# ===============================
+# -------------------------------
+# Connexion à PostgreSQL et initialisation de la DB
+# -------------------------------
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 def init_db():
     conn = get_db_connection()
     cur = conn.cursor()
-    # Table pour stocker les contenus
     cur.execute('''
         CREATE TABLE IF NOT EXISTS contents (
             id SERIAL PRIMARY KEY,
@@ -59,31 +57,29 @@ def init_db():
     cur.close()
     conn.close()
 
-# ===============================
-# Emojis pour types et statuts
-# ===============================
+# -------------------------------
+# Définition des emojis pour affichage
+# -------------------------------
 TYPE_EMOJIS = {
     "Série": "📺",
     "Animé": "🎥",
     "Webtoon": "📱",
     "Manga": "📚"
 }
+
 STATUS_EMOJIS = {
     "En cours": "⏳",
     "À voir": "👀",
     "Terminé": "✅"
 }
 
-# ===============================
-# Configuration du Bot Discord
-# ===============================
+# -------------------------------
+# Création et configuration du bot Discord
+# -------------------------------
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ===============================
-# Événement on_ready
-# ===============================
 @bot.event
 async def on_ready():
     init_db()
@@ -94,13 +90,13 @@ async def on_ready():
     except Exception as e:
         print(f"Erreur de synchronisation : {e}")
 
-# ===============================
-# Commande: /ajouter
-# ===============================
+# -------------------------------
+# Commande : /ajouter (Ajouter un contenu unique)
+# -------------------------------
 @bot.tree.command(name="ajouter", description="Ajouter un contenu (titre, type, statut)")
 @app_commands.describe(
-    titre="Titre du contenu (Ex: One Piece)",
-    type="Type de contenu (Ex: Manga, Animé, etc.)",
+    titre="Titre du contenu (ex: One Piece)",
+    type="Type de contenu (ex: Manga, Animé, Webtoon, Série)",
     statut="Statut (En cours, À voir, Terminé)"
 )
 async def ajouter(interaction: discord.Interaction, titre: str, type: str, statut: str):
@@ -124,10 +120,10 @@ async def ajouter(interaction: discord.Interaction, titre: str, type: str, statu
     embed.add_field(name="Statut", value=f"{statut} {STATUS_EMOJIS.get(statut, '')}", inline=True)
     await interaction.response.send_message(embed=embed)
 
-# ===============================
-# Commande: /liste
-# ===============================
-@bot.tree.command(name="liste", description="Afficher la liste de vos contenus, triés par type.")
+# -------------------------------
+# Commande : /liste (Afficher la liste, triée par type)
+# -------------------------------
+@bot.tree.command(name="liste", description="Afficher la liste de vos contenus (triée par type)")
 async def liste(interaction: discord.Interaction, member: discord.Member = None):
     target = member or interaction.user
     user_id = str(target.id)
@@ -142,22 +138,16 @@ async def liste(interaction: discord.Interaction, member: discord.Member = None)
     rows = cur.fetchall()
     cur.close()
     conn.close()
-
     if not rows:
         await interaction.response.send_message(f"{target.display_name} n'a aucun contenu dans sa liste.", ephemeral=True)
         return
 
-    # Groupement par type
     by_type = {}
     for row in rows:
         ctype = row['content_type']
         by_type.setdefault(ctype, []).append(row)
 
-    embed = discord.Embed(
-        title=f"Liste de contenus de {target.display_name}",
-        color=0x3498db
-    )
-
+    embed = discord.Embed(title=f"Liste de contenus de {target.display_name}", color=0x3498db)
     known_types = ["Série", "Animé", "Webtoon", "Manga"]
     sorted_types = [t for t in known_types if t in by_type] + sorted(t for t in by_type if t not in known_types)
 
@@ -173,12 +163,11 @@ async def liste(interaction: discord.Interaction, member: discord.Member = None)
                 line += f" | Note: {rating}/10"
             contenu += line + "\n"
         embed.add_field(name=f"{ctype} {TYPE_EMOJIS.get(ctype, '')}", value=contenu, inline=False)
-
     await interaction.response.send_message(embed=embed)
 
-# ===============================
-# Commande: /modifier
-# ===============================
+# -------------------------------
+# Commande : /modifier (Modifier un contenu unique par ID)
+# -------------------------------
 @bot.tree.command(name="modifier", description="Modifier le statut d'un contenu par ID")
 @app_commands.describe(
     id="ID du contenu",
@@ -197,7 +186,6 @@ async def modifier(interaction: discord.Interaction, id: int, nouveau_statut: st
     conn.commit()
     cur.close()
     conn.close()
-
     embed = discord.Embed(
         title="Statut modifié",
         description=f"Le contenu #{id} a été mis à jour en **{nouveau_statut} {STATUS_EMOJIS.get(nouveau_statut, '')}**.",
@@ -205,13 +193,13 @@ async def modifier(interaction: discord.Interaction, id: int, nouveau_statut: st
     )
     await interaction.response.send_message(embed=embed)
 
-# ===============================
-# Commande: /noter
-# ===============================
-@bot.tree.command(name="noter", description="Attribuer une note (sur 10) à un contenu.")
+# -------------------------------
+# Commande : /noter (Attribuer une note sur 10 à un contenu)
+# -------------------------------
+@bot.tree.command(name="noter", description="Attribuer une note à un contenu (sur 10)")
 @app_commands.describe(
     id="ID du contenu",
-    note="Note sur 10"
+    note="Note (entre 0 et 10)"
 )
 async def noter(interaction: discord.Interaction, id: int, note: int):
     if note < 0 or note > 10:
@@ -231,20 +219,19 @@ async def noter(interaction: discord.Interaction, id: int, note: int):
     conn.close()
     await interaction.response.send_message(f"Contenu #{id} noté **{note}/10** avec succès !")
 
-# ===============================
-# Commande: /supprimer
-# ===============================
-@bot.tree.command(name="supprimer", description="Supprimer un ou plusieurs contenus (IDs séparés par des virgules).")
+# -------------------------------
+# Commande : /supprimer (Supprimer un ou plusieurs contenus via IDs)
+# -------------------------------
+@bot.tree.command(name="supprimer", description="Supprimer un ou plusieurs contenus (IDs séparés par des virgules)")
 @app_commands.describe(
-    ids="Liste d'IDs séparés par des virgules (ex: 2,4,9)"
+    ids="IDs des contenus à supprimer, séparés par des virgules (ex: 2,4,9)"
 )
 async def supprimer(interaction: discord.Interaction, ids: str):
     user_id = str(interaction.user.id)
-    # Convertir la chaîne en liste d'entiers
     try:
         id_list = [int(x.strip()) for x in ids.split(",") if x.strip().isdigit()]
-    except ValueError:
-        await interaction.response.send_message("IDs invalides.", ephemeral=True)
+    except Exception:
+        await interaction.response.send_message("Veuillez fournir des IDs valides séparés par des virgules.", ephemeral=True)
         return
     if not id_list:
         await interaction.response.send_message("Aucun ID valide fourni.", ephemeral=True)
@@ -256,32 +243,32 @@ async def supprimer(interaction: discord.Interaction, ids: str):
     for cid in id_list:
         cur.execute("DELETE FROM contents WHERE id = %s AND user_id = %s RETURNING title", (cid, user_id))
         row = cur.fetchone()
-        if row is not None:
+        if row:
             deleted.append(row['title'])
     conn.commit()
     cur.close()
     conn.close()
-
     if not deleted:
         await interaction.response.send_message("Aucun contenu supprimé (IDs invalides ou non autorisés).", ephemeral=True)
     else:
         embed = discord.Embed(
-            title="Contenus supprimés",
-            description=", ".join(deleted),
+            title="Suppression réussie",
+            description="Les contenus suivants ont été supprimés : " + ", ".join(deleted),
             color=0x3498db
         )
         await interaction.response.send_message(embed=embed)
 
-# ===============================
-# Ajout multiple (modals + vue)
-# ===============================
+# -------------------------------
+# Commande : /ajoutermulti (Ajouter plusieurs contenus interactifs)
+# -------------------------------
+# Modal de saisie d'un contenu
 class ContentModal(discord.ui.Modal, title="Ajouter un contenu"):
     titre = discord.ui.TextInput(label="Titre", placeholder="Ex: One Piece", max_length=100)
     type_ = discord.ui.TextInput(label="Type", placeholder="Ex: Manga, Animé, etc.", max_length=50)
-    statut = discord.ui.TextInput(label="Statut", placeholder="En cours, À voir, Terminé", max_length=50)
-
+    statut = discord.ui.TextInput(label="Statut", placeholder="Ex: En cours, À voir, Terminé", max_length=50)
+    
     async def on_submit(self, interaction: discord.Interaction):
-        # On stocke dans self.view.entries
+        # Ajouter le contenu dans la liste de la vue associée
         self.view.entries.append({
             "titre": self.titre.value,
             "type": self.type_.value,
@@ -289,6 +276,7 @@ class ContentModal(discord.ui.Modal, title="Ajouter un contenu"):
         })
         await interaction.response.send_message(f"Contenu **{self.titre.value}** ajouté à la liste temporaire.", ephemeral=True)
 
+# Vue interactive pour l'ajout multiple
 class MultiAddView(discord.ui.View):
     def __init__(self, user_id: str):
         super().__init__(timeout=300)
@@ -296,17 +284,16 @@ class MultiAddView(discord.ui.View):
         self.entries = []
 
     @discord.ui.button(label="Ajouter un contenu", style=discord.ButtonStyle.primary)
-    async def add_content(self, button: discord.ui.Button, interaction: discord.Interaction):
+    async def add_content(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = ContentModal()
         modal.view = self
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Confirmer tout", style=discord.ButtonStyle.green)
-    async def confirm_all(self, button: discord.ui.Button, interaction: discord.Interaction):
+    async def confirm_all(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.entries:
             await interaction.response.send_message("Aucun contenu à ajouter.", ephemeral=True)
             return
-
         conn = get_db_connection()
         cur = conn.cursor()
         titres_ajoutes = []
@@ -324,7 +311,6 @@ class MultiAddView(discord.ui.View):
         conn.commit()
         cur.close()
         conn.close()
-
         embed = discord.Embed(
             title="Contenus ajoutés",
             description="\n".join(titres_ajoutes),
@@ -333,18 +319,18 @@ class MultiAddView(discord.ui.View):
         await interaction.response.send_message(embed=embed)
         self.stop()
 
-@bot.tree.command(name="ajoutermulti", description="Ajouter plusieurs contenus (titres, types, statuts différents)")
+@bot.tree.command(name="ajoutermulti", description="Ajouter plusieurs contenus en une fois.")
 async def ajoutermulti(interaction: discord.Interaction):
     view = MultiAddView(user_id=str(interaction.user.id))
     await interaction.response.send_message(
-        "Clique sur **Ajouter un contenu** pour saisir chaque contenu. Quand tu as fini, clique sur **Confirmer tout**.",
+        "Clique sur **Ajouter un contenu** pour saisir chaque contenu, puis sur **Confirmer tout** pour enregistrer le tout.",
         view=view
     )
 
-# ===============================
-# Modification multiple
-# ===============================
-@bot.tree.command(name="modifiermulti", description="Modifier le statut de plusieurs contenus à la fois.")
+# -------------------------------
+# Commande : /modifiermulti (Modifier plusieurs contenus simultanément)
+# -------------------------------
+@bot.tree.command(name="modifiermulti", description="Modifier le statut de plusieurs contenus simultanément.")
 async def modifiermulti(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
     conn = get_db_connection()
@@ -353,9 +339,8 @@ async def modifiermulti(interaction: discord.Interaction):
     rows = cur.fetchall()
     cur.close()
     conn.close()
-
     if not rows:
-        await interaction.response.send_message("Aucun contenu à modifier.", ephemeral=True)
+        await interaction.response.send_message("Aucun contenu trouvé à modifier.", ephemeral=True)
         return
 
     class MultiModifyView(discord.ui.View):
@@ -368,16 +353,14 @@ async def modifiermulti(interaction: discord.Interaction):
             placeholder="Sélectionnez les contenus à modifier",
             min_values=1,
             max_values=len(rows),
-            options=[
-                discord.SelectOption(label=f"{row['title']} (ID: {row['id']})", value=str(row['id'])) for row in rows
-            ]
+            options=[discord.SelectOption(label=f"{row['title']} (ID: {row['id']})", value=str(row['id'])) for row in rows]
         )
         async def select_contents(self, interaction: discord.Interaction, select: discord.ui.Select):
             self.selected_ids = select.values
             await interaction.response.send_message(f"{len(self.selected_ids)} contenu(s) sélectionné(s).", ephemeral=True)
 
         @discord.ui.select(
-            placeholder="Nouveau statut",
+            placeholder="Sélectionnez le nouveau statut",
             min_values=1,
             max_values=1,
             options=[
@@ -388,32 +371,23 @@ async def modifiermulti(interaction: discord.Interaction):
         )
         async def select_status(self, interaction: discord.Interaction, select: discord.ui.Select):
             self.new_status = select.values[0]
-            await interaction.response.send_message(f"Statut sélectionné : {self.new_status}", ephemeral=True)
+            await interaction.response.send_message(f"Nouveau statut sélectionné : {self.new_status}.", ephemeral=True)
 
         @discord.ui.button(label="Confirmer modification", style=discord.ButtonStyle.green)
-        async def confirm_modif(self, button: discord.ui.Button, interaction: discord.Interaction):
+        async def confirm_modif(self, interaction: discord.Interaction, button: discord.ui.Button):
             if not self.selected_ids or not self.new_status:
-                await interaction.response.send_message(
-                    "Veuillez sélectionner au moins un contenu ET un statut.", ephemeral=True
-                )
+                await interaction.response.send_message("Veuillez sélectionner au moins un contenu et un nouveau statut.", ephemeral=True)
                 return
             conn2 = get_db_connection()
             cur2 = conn2.cursor()
             for cid in self.selected_ids:
-                cur2.execute(
-                    "UPDATE contents SET status = %s WHERE id = %s AND user_id = %s",
-                    (self.new_status, cid, user_id)
-                )
+                cur2.execute("UPDATE contents SET status = %s WHERE id = %s AND user_id = %s", (self.new_status, cid, user_id))
             conn2.commit()
             cur2.close()
             conn2.close()
-
             embed = discord.Embed(
                 title="Modification multiple",
-                description=(
-                    f"Les contenus avec les IDs : {', '.join(self.selected_ids)} "
-                    f"ont été mis à jour en **{self.new_status}**."
-                ),
+                description=f"Les contenus avec les IDs : {', '.join(self.selected_ids)} ont été mis à jour en **{self.new_status}**.",
                 color=0x3498db
             )
             await interaction.response.send_message(embed=embed)
@@ -421,12 +395,12 @@ async def modifiermulti(interaction: discord.Interaction):
 
     view = MultiModifyView()
     await interaction.response.send_message(
-        "Sélectionnez les contenus puis le nouveau statut, puis confirmez.",
+        "Sélectionnez les contenus à modifier et choisissez le nouveau statut, puis confirmez.",
         view=view
     )
 
-# ===============================
-# Lancement du bot & serveur web
-# ===============================
+# -------------------------------
+# Lancement du bot et du serveur web
+# -------------------------------
 keep_alive()
 bot.run(TOKEN)

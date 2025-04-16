@@ -172,30 +172,64 @@ async def cmd_ajouter(inter: discord.Interaction,
     emb.set_footer(text="Tape `/contenu liste` pour voir ta liste.")
     await inter.response.send_message(embed=emb, ephemeral=True)
 
-# ————— /contenu liste —————
-@contenu.command(name="liste", description="Afficher la liste (option notes)")
-@app_commands.describe(notes="Afficher uniquement les notés")
-async def cmd_liste(inter: discord.Interaction, notes: bool=False):
-    uid = str(inter.user.id)
-    if notes:
-        rows = await bot.pool.fetch(
-            "SELECT id,title,content_type,status,rating FROM contents "
-            "WHERE user_id=$1 AND rating IS NOT NULL "
-            "ORDER BY rating DESC", uid
-        )
-    else:
-        rows = await bot.pool.fetch(
-            "SELECT id,title,content_type,status,rating FROM contents "
-            "WHERE user_id=$1 ORDER BY status,content_type,title", uid
-        )
-    if not rows:
-        return await inter.response.send_message("❌ Tu n'as aucun contenu.", ephemeral=True)
 
-    emb = discord.Embed(
-        title=f"Ta liste {'(notés)' if notes else ''}",
-        color=0x3498db,
-        timestamp=datetime.utcnow()
+@contenu.command(
+    name="liste",
+    description="Afficher la liste par statut (embeds séparés, miniatures et mise en forme monospaced)"
+)
+async def cmd_liste(inter: discord.Interaction):
+    uid = str(inter.user.id)
+    # Récupère tous les contenus de l'utilisateur
+    rows = await bot.pool.fetch(
+        "SELECT id, title, content_type, status, rating "
+        "FROM contents WHERE user_id=$1 ORDER BY content_type, title",
+        uid
     )
+    if not rows:
+        return await inter.response.send_message("❌ Ta liste est vide.", ephemeral=True)
+
+    # Ordre des statuts et couleurs associées
+    statut_order = ["À voir", "En cours", "Terminé"]
+    statut_colors = {
+        "À voir": 0xe74c3c,
+        "En cours": 0xf1c40f,
+        "Terminé": 0x2ecc71
+    }
+
+    embeds = []
+    for st in statut_order:
+        group = [r for r in rows if r["status"] == st]
+        if not group:
+            continue
+
+        # Embed principal pour cette section
+        emb = discord.Embed(
+            title=f"{st} {STATUS_EMOJIS[st]}",
+            color=statut_colors[st],
+            timestamp=datetime.utcnow()
+        )
+
+        # Miniature (image principale) de la première série de la section
+        thumb = await fetch_thumbnail(group[0]["title"], group[0]["content_type"])
+        if thumb:
+            emb.set_image(url=thumb)
+
+        # Corps du champ en format monospace pour ID et note
+        lines = []
+        for r in group:
+            id_ms = f"`#{r['id']}`"
+            rating_ms = f" | `⭐ {r['rating']}/10`" if r["rating"] is not None else ""
+            lines.append(
+                f"{TYPE_EMOJIS.get(r['content_type'], '')} **{r['title']}** {id_ms}{rating_ms}"
+            )
+
+        # On regroupe toutes les lignes dans un seul champ invisible
+        emb.add_field(name="\u200b", value="\n".join(lines), inline=False)
+        embeds.append(emb)
+
+    # Envoi des embeds (Discord gère l'affichage en séquence)
+    await inter.response.send_message(embeds=embeds)
+
     # Regroupe par statut
     by_stat: Dict[str, List[dict]] = {}
     for r in rows:

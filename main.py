@@ -1,8 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import os
-import threading
+import os, threading
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from flask import Flask
@@ -62,7 +61,7 @@ if DATABASE_URL is None:
     raise Exception("La variable DATABASE_URL n'est pas définie.")
 
 # -------------------------------
-# Connexion à PostgreSQL et initialisation de la base de données
+# Connexion à PostgreSQL et initialisation de la DB
 # -------------------------------
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
@@ -151,12 +150,12 @@ async def ajouter(interaction: discord.Interaction, titre: str, type: str, statu
 # -------------------------------
 # Commande : /liste - Afficher la liste avec filtres et classement par note
 # -------------------------------
-@bot.tree.command(name="liste", description="Afficher la liste de contenus. Filtrez par catégorie, statut ou note.")
+@bot.tree.command(name="liste", description="Afficher la liste de contenus. Filtrez par catégorie, statut ou notes.")
 @app_commands.describe(
     member="Afficher la liste d'un autre utilisateur (optionnel)",
     categorie="Filtrer par type (ex: Manga, Animé, Webtoon, Série) (optionnel)",
     statut="Filtrer par statut (ex: En cours, À voir, Terminé) (optionnel)",
-    notes="Si vrai, affiche uniquement les contenus notés, triés par note décroissante (optionnel)"
+    notes="Si vrai, affiche uniquement les contenus notés triés par note décroissante (optionnel)"
 )
 async def liste(interaction: discord.Interaction, member: discord.Member = None, categorie: str = None, statut: str = None, notes: bool = False):
     target = member or interaction.user
@@ -181,36 +180,34 @@ async def liste(interaction: discord.Interaction, member: discord.Member = None,
     rows = cur.fetchall()
     cur.close()
     conn.close()
-    
+
     if not rows:
         await interaction.response.send_message(
             f"{target.display_name} n'a aucun contenu correspondant aux critères.",
             ephemeral=True
         )
         return
-    
+
     embed = discord.Embed(color=0x3498db)
     if notes:
-        embed.title = f"Contenus notés de {target.display_name} (classement)"
+        embed.title = f"Contenus notés de {target.display_name} (classés par note décroissante)"
         lines = []
-        current_rank = 0
-        index = 0
+        dense_rank = 0
         previous_rating = None
+        # Utilisation du dense ranking : on incrémente le rang uniquement lorsque la note change.
         for row in rows:
-            index += 1
             rating = row['rating']
-            if previous_rating is None or rating < previous_rating:
-                current_rank = index
+            if previous_rating is None or rating != previous_rating:
+                dense_rank += 1
             previous_rating = rating
-            # Utiliser des émojis pour le top 3, sinon numéro
-            if current_rank == 1:
+            if dense_rank == 1:
                 rank_str = "🏆 Top 1"
-            elif current_rank == 2:
+            elif dense_rank == 2:
                 rank_str = "🥈 Top 2"
-            elif current_rank == 3:
+            elif dense_rank == 3:
                 rank_str = "🥉 Top 3"
             else:
-                rank_str = f"{current_rank}."
+                rank_str = f"{dense_rank}."
             lines.append(f"{rank_str} **{row['title']}** {STATUS_EMOJIS.get(row['status'], '')} (#{row['id']}) | Note: {rating}/10")
         embed.description = "\n".join(lines)
     else:
@@ -287,7 +284,7 @@ async def noter(interaction: discord.Interaction, id: int, note: int):
     await interaction.response.send_message(f"Contenu #{id} noté **{note}/10** avec succès !")
 
 # -------------------------------
-# Commande : /supprimer - Supprimer un ou plusieurs contenus
+# Commande : /supprimer - Supprimer un ou plusieurs contenus (IDs séparés par des virgules)
 # -------------------------------
 @bot.tree.command(name="supprimer", description="Supprimer un ou plusieurs contenus (IDs séparés par des virgules)")
 @app_commands.describe(

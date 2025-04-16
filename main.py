@@ -33,43 +33,33 @@ TYPE_EMOJIS: Dict[str, str] = {
     "Manga": "📚"
 }
 STATUS_EMOJIS: Dict[str, str] = {
-    "En cours": "⏳",
     "À voir": "👀",
+    "En cours": "⏳",
     "Terminé": "✅"
 }
 
 # Cache des miniatures
 _thumbnail_cache: Dict[str, str] = {}
 
-# Fonctions de normalisation
+# Helpers
 
 def normalize_type(value: str) -> str:
-    m = {
-        "série": "Série", "serie": "Série",
-        "animé": "Animé", "anime": "Animé",
-        "webtoon": "Webtoon", "manga": "Manga"
-    }
+    m = {"série":"Série","serie":"Série","animé":"Animé","anime":"Animé","webtoon":"Webtoon","manga":"Manga"}
     return m.get(value.lower().strip(), value.capitalize())
-
 
 def normalize_status(value: str) -> str:
-    m = {
-        "en cours": "En cours", "à voir": "À voir", "a voir": "À voir",
-        "terminé": "Terminé", "termine": "Terminé"
-    }
+    m = {"à voir":"À voir","a voir":"À voir","en cours":"En cours","terminé":"Terminé","termine":"Terminé"}
     return m.get(value.lower().strip(), value.capitalize())
 
-# Récupération de la vignette TMDB
 async def fetch_thumbnail(title: str, content_type: str) -> Optional[str]:
     key = f"{title}|{content_type}"
     if key in _thumbnail_cache:
         return _thumbnail_cache[key]
     if not TMDB_API_KEY:
         return None
-    kind = "tv" if content_type in ("Série", "Animé") else "movie"
+    kind = "tv" if content_type in ("Série","Animé") else "movie"
     query = quote_plus(title)
-    url = (f"https://api.themoviedb.org/3/search/{kind}?"
-           f"api_key={TMDB_API_KEY}&query={query}")
+    url = f"https://api.themoviedb.org/3/search/{kind}?api_key={TMDB_API_KEY}&query={query}"
     try:
         timeout = ClientTimeout(total=3)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -78,25 +68,22 @@ async def fetch_thumbnail(title: str, content_type: str) -> Optional[str]:
     except Exception:
         return None
     results = data.get("results") or []
-    if not results:
+    if not results or not results[0].get("poster_path"):
         return None
-    path = results[0].get("poster_path")
-    if not path:
-        return None
-    thumb = f"https://image.tmdb.org/t/p/w200{path}"
+    thumb = f"https://image.tmdb.org/t/p/w200{results[0]['poster_path']}"
     _thumbnail_cache[key] = thumb
     return thumb
 
-# Serveur Flask pour healthcheck
+# Healthcheck
 app = Flask(__name__)
 @app.route("/")
 def home():
     return "RedHerring Bot en ligne"
 
 def run_web():
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT",8000)))
 
-# Classe du Bot
+# Bot class
 class RedHerringBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
@@ -106,9 +93,7 @@ class RedHerringBot(commands.Bot):
         self._stats_cache: Dict[str, Dict] = {}
 
     async def setup_hook(self):
-        # Création du pool asyncpg
         self.pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
-        # Création de la table si nécessaire
         async with self.pool.acquire() as conn:
             await conn.execute(
                 """
@@ -119,12 +104,9 @@ class RedHerringBot(commands.Bot):
                     content_type TEXT,
                     status TEXT,
                     rating INTEGER
-                )
-                """
+                )"""
             )
-        # Synchronisation des commandes slash
         await self.tree.sync()
-        # Démarrage du healthcheck
         threading.Thread(target=run_web, daemon=True).start()
 
 bot = RedHerringBot()
@@ -133,7 +115,7 @@ bot = RedHerringBot()
 async def on_ready():
     print(f"{bot.user} connecté !")
 
-# Vue de pagination
+# Pagination view
 class PaginationView(discord.ui.View):
     def __init__(self, embeds: List[discord.Embed]):
         super().__init__(timeout=120)
@@ -150,79 +132,83 @@ class PaginationView(discord.ui.View):
         self.index = (self.index + 1) % len(self.embeds)
         await interaction.response.edit_message(embed=self.embeds[self.index], view=self)
 
-# Autocomplétion
+# Autocomplete
 async def type_autocomplete(interaction: discord.Interaction, current: str):
-    opts = [t for t in COLOR_MAP if current.lower() in t.lower()]
-    return [app_commands.Choice(name=o, value=o) for o in opts[:5]]
-
+    return [app_commands.Choice(name=t, value=t) for t in COLOR_MAP if current.lower() in t.lower()][:5]
 async def status_autocomplete(interaction: discord.Interaction, current: str):
-    opts = [s for s in STATUS_EMOJIS if current.lower() in s.lower()]
-    return [app_commands.Choice(name=o, value=o) for o in opts[:5]]
+    return [app_commands.Choice(name=s, value=s) for s in STATUS_EMOJIS if current.lower() in s.lower()][:5]
 
-# Commandes Slash: /ajouter
+# /ajouter
 @bot.tree.command(name="ajouter", description="Ajouter un contenu")
-@app_commands.describe(
-    titre="Titre du contenu",
-    type="Type (choix)",
-    statut="Statut (choix)"
-)
-@app_commands.choices(
-    type=[app_commands.Choice(name=t, value=t) for t in COLOR_MAP],
-    statut=[app_commands.Choice(name=s, value=s) for s in STATUS_EMOJIS]
-)
+@app_commands.describe(titre="Titre", type="Type", statut="Statut")
+@app_commands.choices(type=[app_commands.Choice(name=t,value=t) for t in COLOR_MAP],statut=[app_commands.Choice(name=s,value=s) for s in STATUS_EMOJIS])
 async def ajouter(interaction: discord.Interaction, titre: str, type: app_commands.Choice[str], statut: app_commands.Choice[str]):
     async with bot.pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO contents(user_id, title, content_type, status) VALUES($1,$2,$3,$4)",
-            str(interaction.user.id), titre, type.value, statut.value
-        )
-    thumb = await fetch_thumbnail(titre, type.value)
-    embed = discord.Embed(
-        title="Contenu ajouté",
-        description=f"**{titre}**",
-        color=COLOR_MAP.get(type.value, 0x3498db),
-        timestamp=datetime.utcnow()
-    )
-    if thumb:
-        embed.set_thumbnail(url=thumb)
-    embed.add_field(name="Type", value=f"{type.value} {TYPE_EMOJIS[type.value]}", inline=True)
-    embed.add_field(name="Statut", value=f"{statut.value} {STATUS_EMOJIS[statut.value]}", inline=True)
+        await conn.execute("INSERT INTO contents(user_id,title,content_type,status) VALUES($1,$2,$3,$4)",str(interaction.user.id),titre,type.value,statut.value)
+    thumb = await fetch_thumbnail(titre,type.value)
+    embed = discord.Embed(title="Contenu ajouté",description=f"**{titre}**",color=COLOR_MAP.get(type.value),timestamp=datetime.utcnow())
+    if thumb:embed.set_thumbnail(url=thumb)
+    embed.add_field(name="Type",value=f"{type.value} {TYPE_EMOJIS[type.value]}",inline=True)
+    embed.add_field(name="Statut",value=f"{statut.value} {STATUS_EMOJIS[statut.value]}",inline=True)
     await interaction.response.send_message(embed=embed)
 
-# Commandes Slash: /liste
-@bot.tree.command(name="liste", description="Afficher ta liste de contenus")
-@app_commands.describe(categorie="Filtrer par type", statut="Filtrer par statut")
-@app_commands.autocomplete(categorie=type_autocomplete, statut=status_autocomplete)
-async def liste(interaction: discord.Interaction, categorie: Optional[str] = None, statut: Optional[str] = None):
-    args = [str(interaction.user.id)]
-    q = "SELECT id, title, content_type, status, rating FROM contents WHERE user_id=$1"
-    idx = 2
-    if categorie:
-        q += f" AND content_type=${idx}"; args.append(categorie); idx += 1
-    if statut:
-        q += f" AND status=${idx}"; args.append(statut); idx += 1
-    q += " ORDER BY content_type, title"
-    rows = await bot.pool.fetch(q, *args)
-    if not rows:
-        return await interaction.response.send_message("Aucun contenu.", ephemeral=True)
-    embeds: List[discord.Embed] = []
-    for i in range(0, len(rows), 8):
-        emb = discord.Embed(title="Ta liste RedHerring", color=0x3498db, timestamp=datetime.utcnow())
-        for rec in rows[i:i+8]:
-            line = f"**{rec['title']}** {STATUS_EMOJIS[rec['status']]} (#{rec['id']})"
-            if rec['rating'] is not None:
-                line += f" | Note: {rec['rating']}/10"
-            emb.add_field(
-                name=f"{rec['content_type']} {TYPE_EMOJIS[rec['content_type']]}",
-                value=line,
-                inline=False
-            )
+# /liste
+@bot.tree.command(name="liste", description="Afficher ta liste")
+@app_commands.describe(categorie="Type", statut="Statut")
+@app_commands.autocomplete(categorie=type_autocomplete,statut=status_autocomplete)
+async def liste(interaction: discord.Interaction, categorie: Optional[str]=None, statut: Optional[str]=None):
+    args=[str(interaction.user.id)];q="SELECT id,title,content_type,status,rating FROM contents WHERE user_id=$1"
+    idx=2
+    if categorie: q+=f" AND content_type=${idx}";args.append(categorie);idx+=1
+    if statut: q+=f" AND status=${idx}";args.append(statut);idx+=1
+    q+=" ORDER BY content_type,title"
+    rows=await bot.pool.fetch(q,*args)
+    if not rows:return await interaction.response.send_message("Aucun contenu.",ephemeral=True)
+    embeds=[]
+    for i in range(0,len(rows),8):
+        emb=discord.Embed(title="Ta liste RedHerring",color=0x3498db,timestamp=datetime.utcnow())
+        for r in rows[i:i+8]:
+            line=f"**{r['title']}** {STATUS_EMOJIS[r['status']]} (#{r['id']})"
+            if r['rating']!=None:line+=f" | Note: {r['rating']}/10"
+            emb.add_field(name=f"{r['content_type']} {TYPE_EMOJIS[r['content_type']]}",value=line,inline=False)
         embeds.append(emb)
-    view = PaginationView(embeds)
-    await interaction.response.send_message(embed=embeds[0], view=view)
+    await interaction.response.send_message(embed=embeds[0],view=PaginationView(embeds))
 
-# Commandes restantes (/modifier, /modifiermulti, /noter, /supprimer, /recherche, /random, /stats, /export, /import, /help)
-# ... implémentation identique en asyncpg avec vérification et embeds ...
+# /modifier
+@bot.tree.command(name="modifier",description="Modifier statut")
+@app_commands.describe(id="ID",statut="Statut")
+@app_commands.choices(statut=[app_commands.Choice(name=s,value=s) for s in STATUS_EMOJIS])
+async def modifier(interaction: discord.Interaction,id:int,statut:app_commands.Choice[str]):
+    res=await bot.pool.execute("UPDATE contents SET status=$1 WHERE id=$2 AND user_id=$3",statut.value,id,str(interaction.user.id))
+    if not res.endswith("UPDATE 1"):return await interaction.response.send_message("Échec.",ephemeral=True)
+    embed=discord.Embed(title="Statut modifié",description=f"#{id} -> {statut.value}",color=0x2ecc71,timestamp=datetime.utcnow())
+    await interaction.response.send_message(embed=embed)
 
-if __name__ == '__main__':
-    bot.run(DISCORD_TOKEN)
+# /modifiermulti
+class MultiModifyView(discord.ui.View):
+    def __init__(self,entries,user_id):super().__init__(timeout=120);self.entries=entries;self.user_id=user_id;self.sel=[];self.new=None
+    @discord.ui.select(placeholder="Choisir contenus",min_values=1,max_values=5,
+        options=[discord.SelectOption(label=f"{e['title']} (#{e['id']})",value=str(e['id'])) for e in entries])
+    async def sel_items(self,i,s):self.sel=[int(v) for v in s.values];await i.response.send_message(f"{len(self.sel)} sél.",ephemeral=True)
+    @discord.ui.select(placeholder="Nouveau statut",min_values=1,max_values=1,
+        options=[discord.SelectOption(label=s,value=s) for s in STATUS_EMOJIS])
+    async def sel_stat(self,i,s):self.new=s.values[0];await i.response.send_message(f"Statut {self.new}",ephemeral=True)
+    @discord.ui.button(label="OK",style=discord.ButtonStyle.green)
+    async def ok(self,i,b):
+        if not self.sel or not self.new:return await i.response.send_message("Requis.",ephemeral=True)
+        for cid in self.sel:await bot.pool.execute("UPDATE contents SET status=$1 WHERE id=$2 AND user_id=$3",self.new,cid,self.user_id)
+        await i.response.send_message(f"{len(self.sel)} faits.",ephemeral=True);self.stop()
+
+@bot.tree.command(name="modifiermulti",description="Modifier plusieurs")
+async def modifiermulti(i:discord.Interaction):
+    rows=await bot.pool.fetch("SELECT id,title FROM contents WHERE user_id=$1 ORDER BY id",str(i.user.id))
+    if not rows:return await i.response.send_message("Rien.",ephemeral=True)
+    await i.response.send_message("Choose:",view=MultiModifyView([dict(r) for r in rows],str(i.user.id)))
+
+# /noter
+@bot.tree.command(name="noter",description="Noter 0-10")
+@app_commands.describe(id="ID",note="Note")
+async def noter(i,id:int,note:int):
+    if not 0<=note<=10:return await i.response.send_message("0-10.",ephemeral=True)
+    res=await bot.pool.execute("UPDATE contents SET rating=$1 WHERE id=$2 AND user_id=$3",note,id,str(i.user.id))
+    if not res.endswith("UPDATE 1"):return await i.response

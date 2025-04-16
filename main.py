@@ -106,6 +106,7 @@ class RedHerringBot(commands.Bot):
                 )
                 """
             )
+        # Synchronisation des commandes slash
         await self.tree.sync()
         threading.Thread(target=run_web, daemon=True).start()
 

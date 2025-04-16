@@ -138,7 +138,6 @@ async def ajouter(interaction: discord.Interaction, titre: str, type: str, statu
     conn.commit()
     cur.close()
     conn.close()
-
     embed = discord.Embed(
         title="Nouveau contenu ajouté",
         description=f"**{titre}**",
@@ -184,22 +183,31 @@ async def liste(interaction: discord.Interaction, member: discord.Member = None,
     if not rows:
         await interaction.response.send_message(f"{target.display_name} n'a aucun contenu correspondant aux critères.", ephemeral=True)
         return
-
     embed = discord.Embed(color=0x3498db)
     if notes:
         embed.title = f"Contenus notés de {target.display_name} (classés par note décroissante)"
         lines = []
-        for idx, row in enumerate(rows):
-            # Ajouter un indicateur spécial pour les 3 premiers
-            if idx == 0:
+        # Calcul des classements avec égalité pour même note
+        current_rank = 0
+        index = 0
+        previous_rating = None
+        for row in rows:
+            index += 1
+            rating = row['rating']
+            if previous_rating is None or rating < previous_rating:
+                current_rank = index
+            # Si la note est égale à la précédente, le rang reste le même
+            previous_rating = rating
+            # Attribution d'un indicateur pour les top 3
+            if current_rank == 1:
                 rank_str = "🏆 Top 1"
-            elif idx == 1:
+            elif current_rank == 2:
                 rank_str = "🥈 Top 2"
-            elif idx == 2:
+            elif current_rank == 3:
                 rank_str = "🥉 Top 3"
             else:
-                rank_str = f"{idx+1}."
-            lines.append(f"{rank_str} **{row['title']}** {STATUS_EMOJIS.get(row['status'], '')} (#{row['id']}) | Note: {row['rating']}/10")
+                rank_str = f"{current_rank}."
+            lines.append(f"{rank_str} **{row['title']}** {STATUS_EMOJIS.get(row['status'], '')} (#{row['id']}) | Note: {rating}/10")
         embed.description = "\n".join(lines)
     else:
         embed.title = f"Liste de contenus de {target.display_name}"
@@ -232,7 +240,7 @@ async def modifier(interaction: discord.Interaction, id: int, nouveau_statut: st
     user_id = str(interaction.user.id)
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("UPDATE contents SET status = %s WHERE id = %s AND user_id = %s", 
+    cur.execute("UPDATE contents SET status = %s WHERE id = %s AND user_id = %s",
                 (nouveau_statut_normalized, id, user_id))
     if cur.rowcount == 0:
         await interaction.response.send_message("Contenu introuvable ou non autorisé.", ephemeral=True)
@@ -263,7 +271,8 @@ async def noter(interaction: discord.Interaction, id: int, note: int):
     user_id = str(interaction.user.id)
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("UPDATE contents SET rating = %s WHERE id = %s AND user_id = %s", (note, id, user_id))
+    cur.execute("UPDATE contents SET rating = %s WHERE id = %s AND user_id = %s",
+                (note, id, user_id))
     if cur.rowcount == 0:
         await interaction.response.send_message("Contenu introuvable ou non autorisé.", ephemeral=True)
         conn.close()

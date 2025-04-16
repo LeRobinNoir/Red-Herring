@@ -72,7 +72,6 @@ async def fetch_thumbnail(title: str, content_type: str) -> Optional[str]:
     return thumb
 
 # Normalisation
-
 def normalize_type(value: str) -> str:
     m = {"série": "Série", "serie": "Série", "animé": "Animé", "anime": "Animé", "webtoon": "Webtoon", "manga": "Manga"}
     return m.get(value.lower().strip(), value.capitalize())
@@ -104,7 +103,8 @@ class RedHerringBot(commands.Bot):
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
-        await self.tree.sync()
+        self.tree.clear_commands(guild=None)  # 🔁 corrige les erreurs de signature
+        await self.tree.sync()  # 🔄 resynchronise les slash commands
 
 bot = RedHerringBot()
 
@@ -112,12 +112,9 @@ bot = RedHerringBot()
 async def on_ready():
     print(f"✅ {bot.user} est connecté et prêt.")
 
-# Regroupe toutes les commandes dans un groupe
+# Exemple : regroupement de commandes futur avec
 contenu = app_commands.Group(name="contenu", description="Gérer tes contenus")
 bot.tree.add_command(contenu)
-
-# Les autres commandes (ajouter, modifier, liste, etc.) seront ensuite ajoutées dans ce groupe
-# Ex : @contenu.command(name="ajouter") ... etc.
 
 # Lancement
 if __name__ == "__main__":

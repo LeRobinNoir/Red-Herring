@@ -7,7 +7,7 @@ from psycopg2.extras import RealDictCursor
 from flask import Flask
 
 # -------------------------------
-# Fonctions de normalisation pour type et statut
+# Fonctions de normalisation pour le type et le statut
 # -------------------------------
 def normalize_type(value: str) -> str:
     valid_types = {
@@ -61,7 +61,7 @@ if DATABASE_URL is None:
     raise Exception("La variable DATABASE_URL n'est pas définie.")
 
 # -------------------------------
-# Connexion à PostgreSQL et initialisation de la DB
+# Connexion à PostgreSQL et initialisation de la base
 # -------------------------------
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
@@ -148,9 +148,9 @@ async def ajouter(interaction: discord.Interaction, titre: str, type: str, statu
     await interaction.response.send_message(embed=embed)
 
 # -------------------------------
-# Commande : /liste (Afficher la liste avec filtres)
+# Commande : /liste (Afficher la liste avec filtres et classement par note)
 # -------------------------------
-@bot.tree.command(name="liste", description="Afficher la liste de contenus. Filtrez par catégorie, statut, ou note.")
+@bot.tree.command(name="liste", description="Afficher la liste de contenus. Filtrez par catégorie, statut ou notes.")
 @app_commands.describe(
     member="Afficher la liste d'un autre utilisateur (optionnel)",
     categorie="Filtrer par type (ex: Manga, Animé, Webtoon, Série) (optionnel)",
@@ -165,29 +165,34 @@ async def liste(interaction: discord.Interaction, member: discord.Member = None,
     query = "SELECT id, title, content_type, status, rating FROM contents WHERE user_id = %s"
     params = [user_id]
     if categorie:
-        categorie_normalized = normalize_type(categorie)
+        categorie_norm = normalize_type(categorie)
         query += " AND content_type = %s"
-        params.append(categorie_normalized)
+        params.append(categorie_norm)
     if statut:
-        statut_normalized = normalize_status(statut)
+        statut_norm = normalize_status(statut)
         query += " AND status = %s"
-        params.append(statut_normalized)
+        params.append(statut_norm)
     if notes:
-        query += " AND rating IS NOT NULL ORDER BY rating DESC"
+        query += " AND rating IS NOT NULL ORDER BY rating DESC, title"
     else:
         query += " ORDER BY content_type, title"
     cur.execute(query, tuple(params))
     rows = cur.fetchall()
     cur.close()
     conn.close()
+    
     if not rows:
-        await interaction.response.send_message(f"{target.display_name} n'a aucun contenu correspondant aux critères.", ephemeral=True)
+        await interaction.response.send_message(
+            f"{target.display_name} n'a aucun contenu correspondant aux critères.",
+            ephemeral=True
+        )
         return
+    
     embed = discord.Embed(color=0x3498db)
     if notes:
         embed.title = f"Contenus notés de {target.display_name} (classés par note décroissante)"
+        # Calcul du classement avec égalité
         lines = []
-        # Calcul des classements avec égalité pour même note
         current_rank = 0
         index = 0
         previous_rating = None
@@ -196,9 +201,8 @@ async def liste(interaction: discord.Interaction, member: discord.Member = None,
             rating = row['rating']
             if previous_rating is None or rating < previous_rating:
                 current_rank = index
-            # Si la note est égale à la précédente, le rang reste le même
             previous_rating = rating
-            # Attribution d'un indicateur pour les top 3
+            # Si plusieurs contenus ont la même note, ils partagent le même rang
             if current_rank == 1:
                 rank_str = "🏆 Top 1"
             elif current_rank == 2:
@@ -236,12 +240,12 @@ async def liste(interaction: discord.Interaction, member: discord.Member = None,
     nouveau_statut="Nouveau statut (ex: En cours, À voir, Terminé)"
 )
 async def modifier(interaction: discord.Interaction, id: int, nouveau_statut: str):
-    nouveau_statut_normalized = normalize_status(nouveau_statut)
+    nouveau_statut_norm = normalize_status(nouveau_statut)
     user_id = str(interaction.user.id)
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("UPDATE contents SET status = %s WHERE id = %s AND user_id = %s",
-                (nouveau_statut_normalized, id, user_id))
+                (nouveau_statut_norm, id, user_id))
     if cur.rowcount == 0:
         await interaction.response.send_message("Contenu introuvable ou non autorisé.", ephemeral=True)
         conn.close()
@@ -251,7 +255,7 @@ async def modifier(interaction: discord.Interaction, id: int, nouveau_statut: st
     conn.close()
     embed = discord.Embed(
         title="Statut modifié",
-        description=f"Le contenu #{id} a été mis à jour en **{nouveau_statut_normalized} {STATUS_EMOJIS.get(nouveau_statut_normalized, '')}**.",
+        description=f"Le contenu #{id} a été mis à jour en **{nouveau_statut_norm} {STATUS_EMOJIS.get(nouveau_statut_norm, '')}**.",
         color=0x3498db
     )
     await interaction.response.send_message(embed=embed)
@@ -435,32 +439,4 @@ async def modifiermulti(interaction: discord.Interaction):
 
         @discord.ui.button(label="Confirmer modification", style=discord.ButtonStyle.green)
         async def confirm_modif(self, interaction: discord.Interaction, button: discord.ui.Button):
-            if not self.selected_ids or not self.new_status:
-                await interaction.response.send_message("Veuillez sélectionner au moins un contenu ET un nouveau statut.", ephemeral=True)
-                return
-            conn2 = get_db_connection()
-            cur2 = conn2.cursor()
-            for cid in self.selected_ids:
-                cur2.execute("UPDATE contents SET status = %s WHERE id = %s AND user_id = %s", (self.new_status, cid, user_id))
-            conn2.commit()
-            cur2.close()
-            conn2.close()
-            embed = discord.Embed(
-                title="Modification multiple",
-                description=f"Les contenus avec les IDs : {', '.join(self.selected_ids)} ont été mis à jour en **{self.new_status}**.",
-                color=0x3498db
-            )
-            await interaction.response.send_message(embed=embed)
-            self.stop()
-
-    view = MultiModifyView()
-    await interaction.response.send_message(
-        "Sélectionnez les contenus à modifier, choisissez le nouveau statut, puis confirmez.",
-        view=view
-    )
-
-# -------------------------------
-# Lancement du bot et du serveur web
-# -------------------------------
-keep_alive()
-bot.run(TOKEN)
+            if not self.selected_ids_

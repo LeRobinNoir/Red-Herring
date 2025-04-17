@@ -1,12 +1,9 @@
-# main.py – Red Herring bot complet et fonctionnel
+# main.py – Red Herring bot complet et fonctionnel (confirmations visibles)
 
 import os
 import threading
-import io
-import json
-import csv
 import discord
-from discord import app_commands, File
+from discord import app_commands
 from discord.ext import commands
 import asyncpg
 import aiohttp
@@ -14,7 +11,7 @@ from aiohttp import ClientTimeout
 from flask import Flask
 from typing import Optional, List, Dict
 from urllib.parse import quote_plus
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # ————— Configuration —————
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -45,7 +42,6 @@ async def fetch_thumbnail(title: str, content_type: str) -> Optional[str]:
     if not TMDB_API_KEY:
         return None
     kind = "tv" if content_type in ("Série","Animé") else "movie"
-    # Utilise une vignette plus large w300
     url = f"https://api.themoviedb.org/3/search/{kind}?api_key={TMDB_API_KEY}&query={quote_plus(title)}"
     try:
         timeout = ClientTimeout(total=3)
@@ -62,13 +58,29 @@ async def fetch_thumbnail(title: str, content_type: str) -> Optional[str]:
     return None
 
 # ————— Normalisation —————
-def normalize_type(v: str) -> str:
-    m = {"série":"Série","serie":"Série","animé":"Animé","anime":"Animé","webtoon":"Webtoon","manga":"Manga"}
+def normalize_type(v:str)->str:
+    m={"série":"Série","serie":"Série","animé":"Animé","anime":"Animé","webtoon":"Webtoon","manga":"Manga"}
     return m.get(v.lower().strip(), v.capitalize())
 
-def normalize_status(v: str) -> str:
-    m = {"à voir":"À voir","a voir":"À voir","en cours":"En cours","terminé":"Terminé","termine":"Terminé"}
+def normalize_status(v:str)->str:
+    m={"à voir":"À voir","a voir":"À voir","en cours":"En cours","terminé":"Terminé","termine":"Terminé"}
     return m.get(v.lower().strip(), v.capitalize())
+
+# ————— Pagination View —————
+class PaginationView(discord.ui.View):
+    def __init__(self, embeds: List[discord.Embed]):
+        super().__init__(timeout=120)
+        self.embeds = embeds; self.index = 0
+
+    @discord.ui.button(emoji="⬅️", style=discord.ButtonStyle.secondary)
+    async def prev(self, inter, btn):
+        self.index = (self.index - 1) % len(self.embeds)
+        await inter.response.edit_message(embed=self.embeds[self.index], view=self)
+
+    @discord.ui.button(emoji="➡️", style=discord.ButtonStyle.secondary)
+    async def next(self, inter, btn):
+        self.index = (self.index + 1) % len(self.embeds)
+        await inter.response.edit_message(embed=self.embeds[self.index], view=self)
 
 # ————— Bot Definition —————
 class RedHerringBot(commands.Bot):
@@ -77,7 +89,6 @@ class RedHerringBot(commands.Bot):
         intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
         self.pool: Optional[asyncpg.Pool] = None
-        self._stats_cache: Dict[str, dict] = {}
 
     async def setup_hook(self):
         self.pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
@@ -93,7 +104,6 @@ class RedHerringBot(commands.Bot):
                     created_at TIMESTAMP DEFAULT NOW()
                 );
             """)
-        # synchronisation des commands
         if GUILD_ID:
             await self.tree.sync(guild=discord.Object(id=int(GUILD_ID)))
         else:
@@ -101,28 +111,17 @@ class RedHerringBot(commands.Bot):
         threading.Thread(target=run_web, daemon=True).start()
 
 bot = RedHerringBot()
-
-# ————— Groupe principal /contenu —————
 contenu = app_commands.Group(name="contenu", description="Gérer tes contenus")
 bot.tree.add_command(contenu)
 
-# ————— Autocomplete helpers —————
-async def type_autocomplete(inter, cur: str):
-    return [app_commands.Choice(name=t, value=t) for t in COLOR_MAP if cur.lower() in t.lower()][:5]
-async def status_autocomplete(inter, cur: str):
-    return [app_commands.Choice(name=s, value=s) for s in STATUS_EMOJIS if cur.lower() in s.lower()][:5]
-
 # ————— /contenu ajouter —————
 @contenu.command(name="ajouter", description="Ajouter un contenu")
-@app_commands.describe(titre="Titre du contenu", type="Type", statut="Statut")
+@app_commands.describe(titre="Titre", type="Type", statut="Statut")
 @app_commands.choices(
     type=[app_commands.Choice(name=t, value=t) for t in COLOR_MAP],
     statut=[app_commands.Choice(name=s, value=s) for s in STATUS_EMOJIS]
 )
-async def cmd_ajouter(inter: discord.Interaction,
-                      titre: str,
-                      type: app_commands.Choice[str],
-                      statut: app_commands.Choice[str]):
+async def cmd_ajouter(inter: discord.Interaction, titre: str, type: app_commands.Choice[str], statut: app_commands.Choice[str]):
     t_norm = normalize_type(type.value)
     s_norm = normalize_status(statut.value)
     await bot.pool.execute(
@@ -140,19 +139,19 @@ async def cmd_ajouter(inter: discord.Interaction,
         emb.set_thumbnail(url=thumb)
     emb.add_field(name="Type", value=f"{t_norm} {TYPE_EMOJIS[t_norm]}", inline=True)
     emb.add_field(name="Statut", value=f"{s_norm} {STATUS_EMOJIS[s_norm]}", inline=True)
-    emb.set_footer(text="Tape `/contenu liste` pour voir ta liste.")
-    await inter.response.send_message(embed=emb, ephemeral=True)
+    # Confirmation visible au channel
+    await inter.response.send_message(embed=emb)
 
 # ————— /contenu ajoutermulti —————
 class ContentModal(discord.ui.Modal, title="Ajouter un contenu"):
-    titre = discord.ui.TextInput(label="Titre", placeholder="Ex: One Piece", max_length=100)
-    type_ = discord.ui.TextInput(label="Type", placeholder="Manga, Animé...", max_length=50)
-    statut = discord.ui.TextInput(label="Statut", placeholder="À voir, En cours...", max_length=50)
+    titre = discord.ui.TextInput(label="Titre", max_length=100)
+    type_ = discord.ui.TextInput(label="Type", max_length=50)
+    statut = discord.ui.TextInput(label="Statut", max_length=50)
 
     async def on_submit(self, inter: discord.Interaction):
         entry = {"titre": self.titre.value, "type": normalize_type(self.type_.value), "statut": normalize_status(self.statut.value)}
         self.view.entries.append(entry)
-        await inter.response.send_message(f"Ajouté **{entry['titre']}**.", ephemeral=True)
+        await inter.response.send_message(f"Ajouté **{entry['titre']}**.")
 
 class AjouterMultiView(discord.ui.View):
     def __init__(self, user_id: str):
@@ -169,43 +168,47 @@ class AjouterMultiView(discord.ui.View):
     @discord.ui.button(label="✅ Confirmer tout", style=discord.ButtonStyle.success)
     async def confirm_fn(self, inter: discord.Interaction, btn: discord.ui.Button):
         if not self.entries:
-            return await inter.response.send_message("Aucun contenu à ajouter.", ephemeral=True)
-        titres = []
+            return await inter.response.send_message("Aucun contenu à ajouter.")
+        lines = []
         async with bot.pool.acquire() as conn:
             for e in self.entries:
-                res = await conn.fetchrow("INSERT INTO contents(user_id,title,content_type,status) VALUES($1,$2,$3,$4) RETURNING id", self.user_id, e['titre'], e['type'], e['statut'])
-                titres.append(f"{e['titre']} (ID: {res['id']})")
-        emb = discord.Embed(title="Ajout(s) multiple(s)", description="\n".join(titres), color=0x2ecc71)
-        await inter.response.send_message(embed=emb, ephemeral=True)
+                r = await conn.fetchrow(
+                    "INSERT INTO contents(user_id,title,content_type,status) VALUES($1,$2,$3,$4) RETURNING id",
+                    self.user_id, e['titre'], e['type'], e['statut']
+                )
+                lines.append(f"{e['titre']} (ID:{r['id']})")
+        emb = discord.Embed(title="Ajouts multiples ✅", description="\n".join(lines), color=0x2ecc71)
+        await inter.response.send_message(embed=emb)
         self.stop()
 
 @contenu.command(name="ajoutermulti", description="Ajouter plusieurs contenus")
 async def cmd_ajoutermulti(inter: discord.Interaction):
     view = AjouterMultiView(user_id=str(inter.user.id))
-    await inter.response.send_message("Clique sur ➕ pour ajouter chaque contenu, puis ✅ pour confirmer.", view=view)
+    await inter.response.send_message("Clique➕, puis✅ pour confirmer.", view=view)
 
 # ————— /contenu liste —————
-@contenu.command(name="liste", description="Afficher la liste par statut (embeds séparés)")
-async def cmd_liste(inter:
-    discord.Interaction):
-    uid = str(inter.user.id)
-    # inclut created_at pour déterminer le dernier ajouté
+@contenu.command(name="liste", description="Afficher liste paginée par statut")
+@app_commands.describe(member="Afficher la liste d'un autre utilisateur (optionnel)")
+async def cmd_liste(inter: discord.Interaction, member: Optional[discord.Member] = None):
+    target = member or inter.user
+    uid = str(target.id)
     rows = await bot.pool.fetch(
         "SELECT id,title,content_type,status,rating,created_at FROM contents WHERE user_id=$1 ORDER BY content_type,title", uid
     )
     if not rows:
-        return await inter.response.send_message("❌ Ta liste est vide.", ephemeral=True)
-    statut_order = ["À voir","En cours","Terminé"]
-    statut_colors = {"À voir":0xe74c3c,"En cours":0xf1c40f,"Terminé":0x2ecc71}
+        return await inter.response.send_message("❌ Aucun contenu.")
+    statut_order = ["À voir", "En cours", "Terminé"]
+    colors = {"À voir":0xe74c3c, "En cours":0xf1c40f, "Terminé":0x2ecc71}
     embeds = []
     for st in statut_order:
-        grp = [r for r in rows if r['status']==st]
-        if not grp: continue
-        emb = discord.Embed(title=f"{st} {STATUS_EMOJIS[st]}", color=statut_colors[st], timestamp=datetime.utcnow())
-        # sélectionne le plus récemment ajouté
-        latest = max(grp, key=lambda r: r['created_at'])
-        thumb = await fetch_thumbnail(latest['title'], latest['content_type'])
-        if thumb: emb.set_thumbnail(url=thumb)
+        grp = [r for r in rows if r['status'] == st]
+        if not grp:
+            continue
+        emb = discord.Embed(title=f"{st} {STATUS_EMOJIS[st]}", color=colors[st], timestamp=datetime.utcnow())
+        last = max(grp, key=lambda r: r['created_at'])
+        thumb = await fetch_thumbnail(last['title'], last['content_type'])
+        if thumb:
+            emb.set_thumbnail(url=thumb)
         lines = []
         for r in grp:
             id_ms = f"`#{r['id']}`"
@@ -213,38 +216,41 @@ async def cmd_liste(inter:
             lines.append(f"{TYPE_EMOJIS.get(r['content_type'],'')} **{r['title']}** {id_ms}{note_ms}")
         emb.add_field(name="​", value="\n".join(lines), inline=False)
         embeds.append(emb)
-    await inter.response.send_message(embeds=embeds)
+    await inter.response.send_message(embed=embeds[0], view=PaginationView(embeds))
 
 # ————— /contenu noter —————
-@contenu.command(name="noter", description="Noter un contenu (0–10)")
-@app_commands.describe(id="ID du contenu", note="Note sur 10")
+@contenu.command(name="noter", description="Noter (0–10)")
+@app_commands.describe(id="ID du contenu", note="Note 0–10")
 async def cmd_noter(inter: discord.Interaction, id: int, note: int):
-    if note<0 or note>10:
-        return await inter.response.send_message("⚠️ Note entre 0 et 10.", ephemeral=True)
+    if note < 0 or note > 10:
+        return await inter.response.send_message("⚠️ Note 0-10.")
     res = await bot.pool.execute("UPDATE contents SET rating=$1 WHERE id=$2 AND user_id=$3", note, id, str(inter.user.id))
     if res.endswith("UPDATE 1"):
-        return await inter.response.send_message(f"✅ {id} noté {note}/10.", ephemeral=True)
-    await inter.response.send_message("❌ Non trouvé.", ephemeral=True)
+        await inter.response.send_message(f"✅ Contenu #{id} noté {note}/10.")
+    else:
+        await inter.response.send_message("❌ Non autorisé.")
 
 # ————— /contenu modifier —————
-@contenu.command(name="modifier", description="Modifier le statut")
-@app_commands.describe(id="ID du contenu", statut="Nouveau statut")
-@app_commands.choices(statut=[app_commands.Choice(name=s,value=s) for s in STATUS_EMOJIS])
+@contenu.command(name="modifier", description="Modifier statut")
+@app_commands.describe(id="ID", statut="Nouveau statut")
+@app_commands.choices(statut=[app_commands.Choice(name=s, value=s) for s in STATUS_EMOJIS])
 async def cmd_modifier(inter: discord.Interaction, id: int, statut: app_commands.Choice[str]):
     s_norm = normalize_status(statut.value)
     res = await bot.pool.execute("UPDATE contents SET status=$1 WHERE id=$2 AND user_id=$3", s_norm, id, str(inter.user.id))
     if res.endswith("UPDATE 1"):
-        return await inter.response.send_message(f"✅ #{id} → {s_norm}.", ephemeral=True)
-    await inter.response.send_message("❌ Erreur.", ephemeral=True)
+        await inter.response.send_message(f"✅ Contenu #{id} → {s_norm}.")
+    else:
+        await inter.response.send_message("❌ Erreur.")
 
 # ————— /contenu supprimer —————
 @contenu.command(name="supprimer", description="Supprimer un contenu")
-@app_commands.describe(id="ID du contenu")
+@app_commands.describe(id="ID")
 async def cmd_supprimer(inter: discord.Interaction, id: int):
     row = await bot.pool.fetchrow("DELETE FROM contents WHERE id=$1 AND user_id=$2 RETURNING title", id, str(inter.user.id))
     if row:
-        return await inter.response.send_message(f"✅ {row['title']} supprimé.", ephemeral=True)
-    await inter.response.send_message("❌ Non trouvé.", ephemeral=True)
+        await inter.response.send_message(f"✅ {row['title']} supprimé.")
+    else:
+        await inter.response.send_message("❌ Non trouvé.")
 
 # ————— Lancement —————
 if __name__ == "__main__":

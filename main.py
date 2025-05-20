@@ -1,4 +1,4 @@
-# main.py – Red Herring bot complet et fonctionnel (pagination persistante corrigée)
+# main.py – Red Herring bot complet et fonctionnel (pagination persistante corrigée cv marcher)
 
 import os
 import threading

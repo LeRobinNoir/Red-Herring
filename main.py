@@ -21,8 +21,13 @@ GUILD_ID      = os.getenv("GUILD_ID")  # facultatif pour dev
 
 # ————— Visuels —————
 COLOR_MAP = {"Série":0x1abc9c, "Animé":0xe74c3c, "Webtoon":0x9b59b6, "Manga":0xf1c40f}
-TYPE_EMOJIS = {"Série":"📺","Animé":"🎥","Webtoon":"📱","Manga":"📚"}
-STATUS_EMOJIS = {"À voir":"🔴","En cours":"🟠","Terminé":"🟢"}
+TYPE_EMOJIS = {
+    "Série": "📺",
+    "Animé": "🎥",
+    "Webtoon": "📱",
+    "Manga": "📚"
+}
+STATUS_EMOJIS = {"À voir":"🔴","En cours":"🟠","Terminé":"🟢","Abandonné":"⚫"}
 
 # ————— Flask healthcheck —————
 app = Flask(__name__)
